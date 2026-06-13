@@ -47,6 +47,8 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
           .filter((app) => app.id !== pluginId)
           .map((app) => ({id: app.id, name: app.name})),
       activateApp: async (appId) => chromeRef.current.activateApp(appId),
+      forwardKeydown: async (event) =>
+        chromeRef.current.handleForwardedShortcut(event),
       getContext: async () => chromeRef.current.getSharedContext(),
       setContext: async (patch) => chromeRef.current.setSharedContext(patch),
       subscribeContext: async (listener) => {

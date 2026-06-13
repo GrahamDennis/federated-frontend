@@ -9,6 +9,7 @@ import {
 } from 'react';
 import type {
   CommandDescriptor,
+  ForwardedKeyEvent,
   SharedContext,
   ToastOptions,
   ToastTone,
@@ -33,6 +34,8 @@ interface ChromeContextValue {
   getSharedContext(): SharedContext;
   setSharedContext(patch: SharedContext): void;
   subscribeSharedContext(listener: (context: SharedContext) => void): () => void;
+  /** Run a keyboard shortcut forwarded from a focused plugin iframe. */
+  handleForwardedShortcut(event: ForwardedKeyEvent): void;
   /** DOM node in the top nav where plugins portal their toolbar sections. */
   toolbarSlot: HTMLElement | null;
   /** DOM node (full-window overlay) where plugins portal modals/popovers. */
@@ -159,19 +162,30 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     [commandsByPlugin, visibleAppIds],
   );
 
-  // Global Cmd/Ctrl-K toggles the command palette.
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
+  // Global shortcut handling. Used both by the host's own window keydown and by
+  // shortcuts forwarded from focused plugin iframes (which the host can't observe
+  // directly across the origin boundary).
+  const applyShortcut = useCallback(
+    (event: {metaKey: boolean; ctrlKey: boolean; key: string}) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
         setPaletteOpen((open) => !open);
       } else if (event.key === 'Escape') {
         setPaletteOpen(false);
       }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+      }
+      applyShortcut(event);
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [applyShortcut]);
 
   const value = useMemo<ChromeContextValue>(
     () => ({
@@ -182,6 +196,7 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       getSharedContext,
       setSharedContext,
       subscribeSharedContext,
+      handleForwardedShortcut: applyShortcut,
       toolbarSlot,
       modalLayer,
     }),
@@ -193,6 +208,7 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       getSharedContext,
       setSharedContext,
       subscribeSharedContext,
+      applyShortcut,
       toolbarSlot,
       modalLayer,
     ],

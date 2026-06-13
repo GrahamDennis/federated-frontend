@@ -161,6 +161,8 @@ exercising the cross-origin channels rather than mocking them:
 - `tests/shared-context.spec.ts` — docking the Places detail panel beside the map;
   a map selection reflecting in Places and a Places "clear" propagating back; the
   ⌘K palette spanning both composed apps; Places standalone.
+- `tests/shortcuts.spec.ts` — ⌘K opens the palette and Escape closes it even while
+  a cross-origin plugin iframe has focus (forwarded over the thread).
 
 The Playwright config (`playwright.config.ts`) auto-starts both dev servers via
 `webServer`, so `npm test` is self-contained. It drives the locally installed
@@ -202,6 +204,14 @@ npm run test:ui     # interactive Playwright UI
   return it bare from an `async` function — `Promise.resolve` will thenable-check
   it, accessing `.then` and firing a phantom remote `then()` call. Wrap it (e.g.
   `return {host}`) or nest it inside a plain object.
+- **Global shortcuts require plugin cooperation.** A cross-origin iframe is a hard
+  boundary — keystrokes inside it don't reach the host, so ⌘K wouldn't open the
+  palette while a plugin is focused. Plugins relay shortcuts via
+  `forwardKeyboardShortcuts(host)` (one call after connecting) → `host.forwardKeydown`
+  → the same handler the host's own window listener uses. Only chord shortcuts
+  (⌘/Ctrl) and Escape are forwarded — never ordinary typing — so the host can't
+  keylog the plugin, and nothing is `preventDefault`ed so the plugin's own ⌘C/⌘V
+  keep working.
 - **Sandbox**: `allow-scripts allow-same-origin`. `allow-same-origin` gives the
   iframe *its own* origin (`:5174`), not the host's; since that differs from the
   host origin, the two remain isolated by the browser while still allowing targeted

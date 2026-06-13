@@ -57,6 +57,15 @@ export interface HostApi {
   activateApp(appId: string): Promise<void>;
 
   /**
+   * Forward a keyboard shortcut that fired inside the plugin's iframe to the
+   * host, so global shortcuts (⌘K, Escape, …) work even when the iframe has
+   * focus. A cross-origin iframe is a hard boundary — the host can't see these
+   * keystrokes itself, so cooperating plugins relay them (see
+   * {@link forwardKeyboardShortcuts}).
+   */
+  forwardKeydown(event: ForwardedKeyEvent): Promise<void>;
+
+  /**
    * Shared workspace context, host-mediated. This is how multiple apps composed
    * into one workspace cohere around the same data (e.g. a "current selection").
    * The host is the domain-agnostic broker: it stores a bag and broadcasts
@@ -95,6 +104,44 @@ export interface SelectedPlace {
 export interface AppSummary {
   id: string;
   name: string;
+}
+
+/** The serializable subset of a `KeyboardEvent` relayed from a plugin to the host. */
+export interface ForwardedKeyEvent {
+  key: string;
+  code: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}
+
+/**
+ * Relay global keyboard shortcuts from a plugin's iframe to the host. Attach once
+ * after connecting; returns a cleanup function.
+ *
+ * Only chord shortcuts (with ⌘/Ctrl) and Escape are forwarded — never ordinary
+ * typing — so the host can drive global shortcuts without being able to observe
+ * what the user types into the plugin. Nothing is `preventDefault`ed, so the
+ * plugin's own ⌘C/⌘V etc. keep working.
+ */
+export function forwardKeyboardShortcuts(host: {
+  forwardKeydown(event: ForwardedKeyEvent): unknown;
+}): () => void {
+  const onKeyDown = (event: KeyboardEvent) => {
+    const isChord = event.metaKey || event.ctrlKey;
+    if (!isChord && event.key !== 'Escape') return;
+    host.forwardKeydown({
+      key: event.key,
+      code: event.code,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+    });
+  };
+  window.addEventListener('keydown', onKeyDown);
+  return () => window.removeEventListener('keydown', onKeyDown);
 }
 
 /**

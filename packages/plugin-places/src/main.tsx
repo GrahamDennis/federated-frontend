@@ -1,7 +1,11 @@
 import {createRoot} from 'react-dom/client';
 import {ThreadWindow} from '@quilted/threads';
 import type {ThreadImports} from '@quilted/threads';
-import {HOST_ORIGIN, type HostThread} from '@ff/protocol';
+import {
+  forwardKeyboardShortcuts,
+  HOST_ORIGIN,
+  type HostThread,
+} from '@ff/protocol';
 import {PlacesApp} from './PlacesApp';
 import './styles.css';
 
@@ -52,6 +56,7 @@ async function connectToHost(): Promise<{
 
 async function boot() {
   const connected = await connectToHost();
+  if (connected) forwardKeyboardShortcuts(connected.host);
   createRoot(document.getElementById('root')!).render(
     <PlacesApp host={connected?.host} />,
   );

@@ -4,7 +4,7 @@ import {createRemoteComponent} from '@remote-dom/react';
 import {RemoteMutationObserver} from '@remote-dom/core/elements';
 import type {RemoteConnection} from '@remote-dom/core/elements';
 import type {ThreadImports} from '@quilted/threads';
-import type {HostThread} from '@ff/protocol';
+import {forwardKeyboardShortcuts, type HostThread} from '@ff/protocol';
 import {
   ELEMENT_TAGS,
   StackElement,
@@ -59,6 +59,8 @@ const hostedKit: ComponentKit = {
 };
 
 export function createHostedPlatform(host: ThreadImports<HostThread>): Platform {
+  // Relay ⌘K/Escape etc. so host shortcuts work while this iframe has focus.
+  forwardKeyboardShortcuts(host);
   return {
     mode: 'hosted',
     toast: (message, options) => void host.toast(message, options),
