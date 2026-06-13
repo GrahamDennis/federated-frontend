@@ -75,3 +75,234 @@ button.primary {
   padding-left: 18px;
   margin: 0;
 }
+
+.switcher {
+  border-top: 1px solid #e3e6ea;
+  margin-bottom: 16px;
+  padding-top: 12px;
+}
+.switcher h2 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+.unavailable {
+  color: #8a929c;
+  font-size: 14px;
+  font-style: italic;
+  margin: 0;
+}
+
+/* Buttons used by the standalone component kit. */
+.btn {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #d4d8dd;
+  background: #fff;
+  color: #1b1f24;
+  cursor: pointer;
+}
+.btn:hover {
+  border-color: #4c8dff;
+}
+.btn-primary {
+  background: #2f6fe0;
+  border-color: #2f6fe0;
+  color: #fff;
+}
+.btn-critical {
+  background: #fff;
+  border-color: #f0506e;
+  color: #f0506e;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   Standalone chrome — the mini-shell the plugin renders itself
+   when it has no host (so most functionality still works).
+   ============================================================ */
+.sa-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.sa-nav {
+  position: sticky;
+  top: 0;
+  z-index: 160;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 52px;
+  padding: 0 16px;
+  background: #fff;
+  border-bottom: 1px solid #e3e6ea;
+}
+.sa-brand {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sa-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #2f6fe0;
+  border: 1px solid #2f6fe0;
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.sa-toolbar-slot {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sa-toolbar-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: #f3f5f8;
+  border: 1px dashed #2f6fe0;
+  border-radius: 8px;
+}
+.sa-toolbar-label {
+  font-size: 12px;
+  color: #5a626c;
+}
+.sa-cmdk {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #5a626c;
+}
+
+.sa-content {
+  flex: 1;
+}
+
+.sa-toast-region {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 200;
+}
+.sa-toast {
+  min-width: 240px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #d4d8dd;
+  background: #fff;
+  box-shadow: 0 8px 30px rgba(20, 28, 40, 0.18);
+}
+.sa-toast-success {
+  border-color: #3fb950;
+}
+.sa-toast-critical {
+  border-color: #f0506e;
+}
+
+.sa-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 28, 40, 0.35);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  z-index: 210;
+}
+.sa-palette {
+  width: 540px;
+  max-width: 90vw;
+  background: #fff;
+  border: 1px solid #d4d8dd;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(20, 28, 40, 0.25);
+}
+.sa-palette-input {
+  width: 100%;
+  padding: 15px 16px;
+  font-size: 16px;
+  border: 0;
+  border-bottom: 1px solid #e3e6ea;
+  outline: none;
+}
+.sa-palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 320px;
+  overflow: auto;
+}
+.sa-palette-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sa-palette-item.active {
+  background: #f3f5f8;
+}
+.sa-palette-item-subtitle {
+  font-size: 12px;
+  color: #5a626c;
+}
+.sa-palette-empty {
+  padding: 16px;
+  text-align: center;
+  color: #8a929c;
+}
+
+.sa-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 28, 40, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 150;
+}
+.sa-modal {
+  width: 480px;
+  max-width: 90vw;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(20, 28, 40, 0.3);
+}
+.sa-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #e3e6ea;
+}
+.sa-modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.sa-modal-close {
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  color: #5a626c;
+  padding: 0 4px;
+}
+.sa-modal-body {
+  padding: 18px;
+  line-height: 1.6;
+}

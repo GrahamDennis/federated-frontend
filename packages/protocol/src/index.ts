@@ -45,6 +45,20 @@ export interface HostApi {
   toast(message: string, options?: ToastOptions): Promise<void>;
   /** Replace this plugin's contributed command-palette entries. */
   setCommands(commands: CommandDescriptor[]): Promise<void>;
+  /**
+   * Other apps available in the surrounding shell (excluding the caller), so a
+   * plugin can offer to switch to a sibling app. This capability is inherently
+   * host-only — there is no equivalent when the app runs standalone.
+   */
+  listApps(): Promise<AppSummary[]>;
+  /** Ask the shell to bring another app to the foreground. Host-only. */
+  activateApp(appId: string): Promise<void>;
+}
+
+/** A sibling app surfaced to a plugin by {@link HostApi.listApps}. */
+export interface AppSummary {
+  id: string;
+  name: string;
 }
 
 /**

@@ -20,6 +20,10 @@ interface ChromeContextValue {
   toast(message: string, options?: ToastOptions): void;
   /** Replace the command-palette entries contributed by one plugin. */
   setCommandsForPlugin(pluginId: string, commands: CommandDescriptor[]): void;
+  /** All registered apps (so a plugin can be offered its siblings). */
+  apps: AppDescriptor[];
+  /** Bring an app to the foreground. */
+  activateApp(appId: string): void;
   /** DOM node in the top nav where plugins portal their toolbar sections. */
   toolbarSlot: HTMLElement | null;
   /** DOM node (full-window overlay) where plugins portal modals/popovers. */
@@ -114,8 +118,15 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   }, []);
 
   const value = useMemo<ChromeContextValue>(
-    () => ({toast, setCommandsForPlugin, toolbarSlot, modalLayer}),
-    [toast, setCommandsForPlugin, toolbarSlot, modalLayer],
+    () => ({
+      toast,
+      setCommandsForPlugin,
+      apps,
+      activateApp,
+      toolbarSlot,
+      modalLayer,
+    }),
+    [toast, setCommandsForPlugin, apps, activateApp, toolbarSlot, modalLayer],
   );
 
   return (

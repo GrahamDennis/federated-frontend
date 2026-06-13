@@ -69,7 +69,7 @@ test.describe('app switching', () => {
   }) => {
     // Put the plugin into a non-default state from inside its iframe.
     await pluginFrame(page)
-      .getByRole('button', {name: 'Open host modal'})
+      .getByRole('button', {name: 'Open the modal'})
       .click();
     await expect(page.locator('.modal-layer .modal')).toBeVisible();
 
@@ -90,5 +90,15 @@ test.describe('app switching', () => {
     await expect(page.locator('.app-badge.external')).toContainText(
       'no integration',
     );
+  });
+
+  test('a hosted plugin can switch the shell to a sibling app', async ({
+    connectedPage: page,
+  }) => {
+    // The plugin learns about siblings via host.listApps() and offers to switch.
+    await pluginFrame(page).getByRole('button', {name: 'Open Google'}).click();
+
+    await expect(page.locator('iframe[title="google"]')).toBeVisible();
+    await expect(page.locator(toolbarSection)).toHaveCount(0);
   });
 });

@@ -78,18 +78,18 @@ test.describe('remote-dom contributions', () => {
   }) => {
     // Open from inside the iframe...
     await pluginFrame(page)
-      .getByRole('button', {name: 'Open host modal'})
+      .getByRole('button', {name: 'Open the modal'})
       .click();
     await expect(page.locator('.modal-layer .modal')).toBeVisible();
     // ...the in-iframe button label reflects the shared state...
     await expect(
-      pluginFrame(page).getByRole('button', {name: 'Close host modal'}),
+      pluginFrame(page).getByRole('button', {name: 'Close the modal'}),
     ).toBeVisible();
     // ...and closing via the host updates it back.
     await page.locator('.modal-layer .modal .modal-close').click();
     await expect(page.locator('.modal-layer .modal')).toHaveCount(0);
     await expect(
-      pluginFrame(page).getByRole('button', {name: 'Open host modal'}),
+      pluginFrame(page).getByRole('button', {name: 'Open the modal'}),
     ).toBeVisible();
   });
 });

@@ -1,49 +1,102 @@
 import {createRoot} from 'react-dom/client';
 import {ThreadWindow} from '@quilted/threads';
-import {RemoteMutationObserver} from '@remote-dom/core/elements';
 import {HOST_ORIGIN, type CommandDescriptor, type HostThread} from '@ff/protocol';
-import {InAppUI} from './InAppUI';
+import {PlatformProvider, type Platform} from './platform';
+import {createHostedPlatform} from './kit-hosted';
+import {createStandalonePlatform, StandaloneChrome} from './kit-standalone';
 import {Contributions} from './Contributions';
-import {setHost} from './hostApi';
+import {InAppUI} from './InAppUI';
 import {setState} from './store';
 import './styles.css';
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(
+      () => reject(new Error('host handshake timed out')),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Decide how the plugin is running. If we're top-level we're definitely
+ * standalone. If we're framed we *might* be hosted, but only by something that
+ * speaks our protocol — so we attempt the handshake and fall back to standalone
+ * if no host answers in time (e.g. embedded by an unrelated page).
+ */
+async function detectPlatform(): Promise<Platform> {
+  const framed = (() => {
+    try {
+      return window.top !== window.self;
+    } catch {
+      // Cross-origin parent: we're definitely framed.
+      return true;
+    }
+  })();
+
+  if (framed) {
+    const thread = ThreadWindow.parent<HostThread>({targetOrigin: HOST_ORIGIN});
+    try {
+      const connection = await withTimeout(thread.imports.connect(), 2500);
+      return createHostedPlatform(thread.imports, connection);
+    } catch {
+      thread.close();
+    }
+  }
+
+  return createStandalonePlatform();
+}
+
 async function boot() {
-  // Connect to the host chrome. Because the host has been listening since it
-  // created our iframe, the plugin can safely send the first message.
-  const thread = ThreadWindow.parent<HostThread>({targetOrigin: HOST_ORIGIN});
-  const host = thread.imports;
-  setHost(host);
+  const platform = await detectPlatform();
 
-  // 1. Render the plugin's own UI inside the iframe (no host needed for this).
-  createRoot(document.getElementById('root')!).render(<InAppUI />);
-
-  // 2. Capability API — contribute command-palette entries. The `run` callbacks
-  //    are proxied back to us by threads when the user picks them in the host.
+  // Register command-palette entries (host palette when hosted; the plugin's own
+  // palette when standalone).
   const commands: CommandDescriptor[] = [
     {
       id: 'notes.hello',
       title: 'Notes: Say hello',
-      subtitle: 'Plugin command → host-rendered toast',
-      run: () => void host.toast('👋 Hello from the example plugin!', {tone: 'success'}),
+      subtitle: 'Show a toast',
+      run: () =>
+        platform.toast('👋 Hello from the example plugin!', {tone: 'success'}),
     },
     {
       id: 'notes.details',
       title: 'Notes: Open details',
-      subtitle: 'Opens a whole-window modal rendered by the host',
+      subtitle: 'Open the details modal',
       run: () => setState({modalOpen: true}),
     },
   ];
-  void host.setCommands(commands);
+  platform.setCommands(commands);
 
-  // 3. remote-dom — pull the host's connection and stream our contributed tree
-  //    (toolbar section + modal) to it. We observe a detached container so only
-  //    the contribution tree crosses the boundary, not the in-iframe UI above.
-  const connection = await host.connect();
-  const container = document.createElement('div');
-  const observer = new RemoteMutationObserver(connection);
-  observer.observe(container);
-  createRoot(container).render(<Contributions />);
+  const root = createRoot(document.getElementById('root')!);
+  if (platform.mode === 'standalone') {
+    // The plugin supplies its own chrome and renders its contributions inline.
+    root.render(
+      <StandaloneChrome platform={platform}>
+        <Contributions />
+        <InAppUI />
+      </StandaloneChrome>,
+    );
+  } else {
+    // Hosted: this page is just the in-iframe UI. The contributed tree was
+    // already mounted into the remote-dom container by createHostedPlatform.
+    root.render(
+      <PlatformProvider value={platform}>
+        <InAppUI />
+      </PlatformProvider>,
+    );
+  }
 }
 
 void boot();

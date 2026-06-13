@@ -1,43 +1,87 @@
+import {useEffect, useState} from 'react';
+import type {AppSummary} from '@ff/protocol';
+import {usePlatform} from './platform';
 import {useStore, setState} from './store';
-import {getHost} from './hostApi';
 
 /**
- * The plugin's own UI, rendered normally inside its iframe (origin :5174). This
- * is the part confined to the iframe's rectangle. Everything that needs to
- * escape that rectangle goes through the host (see Contributions / commands).
+ * The plugin's own page content — rendered inside its iframe when hosted, and
+ * inside its own standalone chrome otherwise. It uses the platform abstraction,
+ * so the same code works in both modes; host-only capabilities are feature-
+ * detected and degrade gracefully.
  */
 export function InAppUI() {
+  const platform = usePlatform();
   const modalOpen = useStore((s) => s.modalOpen);
+  const [siblingApps, setSiblingApps] = useState<AppSummary[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    platform.listApps?.().then(
+      (apps) => {
+        if (!cancelled) setSiblingApps(apps);
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [platform]);
 
   return (
     <div className="app">
       <h1>📝 Example Notes Plugin</h1>
       <p>
-        This document is an <strong>untrusted third-party app</strong> running in
-        a sandboxed, cross-origin iframe (<code>localhost:5174</code>). It cannot
-        touch the host DOM directly — only the negotiated channels.
+        Running <strong>{platform.mode}</strong>.{' '}
+        {platform.mode === 'hosted'
+          ? 'Embedded in the host chrome via a sandboxed cross-origin iframe; toasts, commands, the toolbar, and the modal are all routed to the host.'
+          : 'Loaded directly with no host, so the plugin provides its own chrome for toasts, commands, the toolbar, and the modal.'}
       </p>
 
       <div className="row">
         <button
           className="primary"
           onClick={() =>
-            void getHost().toast('Hello from inside the iframe!', {tone: 'info'})
+            platform.toast('Hello from the Notes plugin', {tone: 'info'})
           }
         >
-          Trigger a host toast
+          Show a toast
         </button>
         <button onClick={() => setState({modalOpen: !modalOpen})}>
-          {modalOpen ? 'Close' : 'Open'} host modal
+          {modalOpen ? 'Close the modal' : 'Open the modal'}
         </button>
       </div>
 
+      <section className="switcher">
+        <h2>Switch to another app</h2>
+        {platform.switchApp ? (
+          siblingApps.length > 0 ? (
+            <div className="row">
+              {siblingApps.map((app) => (
+                <button
+                  key={app.id}
+                  onClick={() => platform.switchApp?.(app.id)}
+                >
+                  Open {app.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="unavailable">No other apps in the shell.</p>
+          )
+        ) : (
+          <p className="unavailable">
+            Only available when hosted — there's no surrounding shell to switch
+            within while running standalone.
+          </p>
+        )}
+      </section>
+
       <ul className="hint">
-        <li>It contributed a toolbar section to the top of the chrome.</li>
+        <li>It contributes a toolbar section (to the chrome's top bar).</li>
         <li>
-          It registered two <kbd>⌘K</kbd> command-palette entries.
+          It registers two <kbd>⌘K</kbd> command-palette entries.
         </li>
-        <li>The modal it opens is rendered by the host over the whole window.</li>
+        <li>The details modal covers the whole window.</li>
       </ul>
     </div>
   );

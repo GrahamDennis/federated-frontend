@@ -10,12 +10,12 @@ test.describe('capability API', () => {
     connectedPage: page,
   }) => {
     await pluginFrame(page)
-      .getByRole('button', {name: 'Trigger a host toast'})
+      .getByRole('button', {name: 'Show a toast'})
       .click();
 
     const toast = page.locator('.toast-region .toast');
     await expect(toast).toBeVisible();
-    await expect(toast).toHaveText('Hello from inside the iframe!');
+    await expect(toast).toHaveText('Hello from the Notes plugin');
   });
 
   test('the plugin registers its command-palette entries', async ({

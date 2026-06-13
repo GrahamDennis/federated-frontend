@@ -38,6 +38,29 @@ packages/
 The host and plugin run on **different origins** (`:5173` vs `:5174`) so the
 iframe boundary is a real security boundary, not just a visual frame.
 
+### Hosted vs standalone (progressive enhancement)
+
+The example plugin also runs **standalone** — open http://localhost:5174 directly.
+On boot it detects its environment: if it's top-level it's standalone; if it's
+framed it attempts the threads handshake and falls back to standalone if no host
+answers (so it survives being embedded by an unrelated page too).
+
+The plugin's feature code is written once against a `Platform` abstraction
+(`plugin-example/src/platform.tsx`): `toast`, `setCommands`, a component kit
+(`Toolbar`/`Modal`/`Button`/`Stack`/`Text`), and *optional* host-only
+capabilities. Two implementations:
+
+- **hosted** (`kit-hosted.tsx`) — the kit is remote-dom elements rendered by the
+  host; `toast`/`setCommands` go over threads.
+- **standalone** (`kit-standalone.tsx`) — the plugin renders its **own** minimal
+  chrome (toast region, ⌘K palette, whole-window modal layer, header toolbar) so
+  nearly everything still works.
+
+What's **not** possible standalone is modelled as optional capabilities that are
+simply absent: e.g. `switchApp`/`listApps` (asking the shell to foreground a
+sibling app) only exist when hosted, and the UI feature-detects them and degrades
+gracefully.
+
 ### Multiple apps
 
 The chrome hosts a registry of apps (`host/src/apps.ts`) and switches between them
@@ -94,7 +117,11 @@ exercising the cross-origin channels rather than mocking them:
   filtering; the ⌘K shortcut.
 - `tests/app-switching.spec.ts` — the app rail lists every app; backgrounding a
   plugin hides it and its contributions (but keeps it alive/running); switching
-  back restores them; and a backgrounded plugin keeps its state across switches.
+  back restores them; a backgrounded plugin keeps its state across switches; and a
+  hosted plugin can ask the shell to switch to a sibling app.
+- `tests/standalone.spec.ts` — loading the plugin directly: it detects standalone
+  mode and its own chrome, toasts/modal/command-palette all work, and the
+  host-only "switch app" capability is correctly unavailable.
 
 The Playwright config (`playwright.config.ts`) auto-starts both dev servers via
 `webServer`, so `npm test` is self-contained. It drives the locally installed

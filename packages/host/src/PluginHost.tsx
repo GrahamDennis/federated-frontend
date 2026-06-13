@@ -37,6 +37,11 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
         chromeRef.current.toast(message, options),
       setCommands: async (commands) =>
         chromeRef.current.setCommandsForPlugin(pluginId, commands),
+      listApps: async () =>
+        chromeRef.current.apps
+          .filter((app) => app.id !== pluginId)
+          .map((app) => ({id: app.id, name: app.name})),
+      activateApp: async (appId) => chromeRef.current.activateApp(appId),
     };
 
     const thread = ThreadWindow.iframe<Record<string, never>, HostThread>(
