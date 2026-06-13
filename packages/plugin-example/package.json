@@ -1,0 +1,25 @@
+{
+  "name": "@ff/plugin-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@ff/protocol": "*",
+    "@quilted/threads": "^4.0.3",
+    "@remote-dom/core": "^1.11.1",
+    "@remote-dom/react": "^1.2.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^7.3.0"
+  }
+}

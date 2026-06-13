@@ -1,0 +1,28 @@
+{
+  "name": "federated-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n host,plugin -c cyan,magenta \"npm:dev:host\" \"npm:dev:plugin\"",
+    "dev:host": "npm run dev -w @ff/host",
+    "dev:plugin": "npm run dev -w @ff/plugin-example",
+    "build": "npm run build -w @ff/protocol && npm run build -w @ff/host && npm run build -w @ff/plugin-example",
+    "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p packages/host/tsconfig.json && tsc --noEmit -p packages/plugin-example/tsconfig.json",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  },
+  "comment": "Force a single copy of the React types: @remote-dom/react depends on @types/react@18, which otherwise collides with the app's v19 types (duplicate ReactNode/Context identities).",
+  "overrides": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  }
+}
