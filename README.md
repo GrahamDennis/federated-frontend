@@ -46,10 +46,21 @@ via the left app rail. Two kinds:
 - **`plugin`** — integrated, loaded via `PluginHost` (thread + remote-dom).
 - **`external`** — a plain sandboxed iframe with no host integration (e.g. Google).
 
-Only the active app is mounted. Switching away from a plugin unmounts it, which
-runs its cleanup: the thread closes and its contributed commands/toolbar are
-removed from the chrome. Switching back re-mounts and re-handshakes (so the plugin
-reloads — state is not preserved across switches, which is fine for this prototype).
+Apps are **kept alive**: once activated, an app stays mounted and is merely hidden
+when another app is foregrounded, so its iframe, thread, and state survive
+switches (no reload, no re-handshake). What's scoped to the active app are the
+*contributions*: a backgrounded plugin keeps running, but its toolbar section,
+command-palette entries, and modal are only surfaced while it's in the foreground
+(`PluginHost` mounts the `RemoteRootRenderer` only when `active`; the chrome shows
+only the active app's commands). **Toasts are the deliberate exception** — a
+backgrounded app can still raise one, which is much of the point of keeping it
+alive. The app rail (`aliveAppIds`) is kept in most-recently-used order so a future
+policy can cap the number of backgrounded apps and/or evict ones idle past a
+timeout.
+
+The host chrome (nav + app rail) renders **above** plugin-contributed modals, so
+an untrusted plugin can't cover the whole window and trap the user — they can
+always switch apps or open ⌘K.
 
 > The Google entry uses `https://www.google.com/webhp?igu=1`. Plain
 > `https://google.com` refuses to be framed (`X-Frame-Options` / CSP
@@ -81,8 +92,9 @@ exercising the cross-origin channels rather than mocking them:
 - `tests/capability-api.spec.ts` — toast from inside the iframe; command-palette
   registration; command `run` callbacks proxied back to the plugin; query
   filtering; the ⌘K shortcut.
-- `tests/app-switching.spec.ts` — the app rail lists every app; switching to the
-  external app tears down the plugin's contributions; switching back restores them.
+- `tests/app-switching.spec.ts` — the app rail lists every app; backgrounding a
+  plugin hides it and its contributions (but keeps it alive/running); switching
+  back restores them; and a backgrounded plugin keeps its state across switches.
 
 The Playwright config (`playwright.config.ts`) auto-starts both dev servers via
 `webServer`, so `npm test` is self-contained. It drives the locally installed
@@ -119,12 +131,13 @@ npm run test:ui     # interactive Playwright UI
   host origin, the two remain isolated by the browser while still allowing targeted
   `postMessage`.
 - This is a prototype: the app registry is hardcoded, there's no per-plugin CSP or
-  auth, only one app is mounted at a time, and switching reloads it. See "Next
-  steps" below.
+  auth, and every activated app is kept alive indefinitely (no eviction yet). See
+  "Next steps" below.
 
 ## Next steps (not implemented)
 
 - A real plugin registry / manifest and dynamic loading.
 - Per-plugin Content-Security-Policy and permission scoping of the capability API.
 - More contributed surfaces (sidebars, settings panels, context menus).
-- Multiple concurrent plugins (the host already keys commands by plugin id).
+- A keep-alive eviction policy: cap the number of backgrounded apps and evict the
+  least-recently-used / longest-idle ones (the `aliveAppIds` MRU list is the hook).

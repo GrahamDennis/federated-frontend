@@ -56,7 +56,11 @@ code {
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 10;
+  /* The host chrome (nav + app rail) stays above plugin-contributed modals
+     (z 150) so an untrusted plugin can't cover the whole window and trap the
+     user — they can always switch apps or use ⌘K. The host's own palette (z 200)
+     is still allowed on top. */
+  z-index: 160;
 }
 
 .brand {
@@ -120,6 +124,9 @@ code {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* Stay above plugin modals so the user can always switch apps (see .nav). */
+  position: relative;
+  z-index: 160;
 }
 .app-rail-heading {
   font-size: 11px;
@@ -170,6 +177,11 @@ code {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+/* A class `display` would otherwise override the UA `[hidden]` rule, so a
+   backgrounded (kept-alive) pane must be hidden explicitly. */
+.workspace[hidden] {
+  display: none;
 }
 
 .workspace-hint {

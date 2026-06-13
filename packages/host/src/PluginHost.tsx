@@ -9,9 +9,15 @@ import {components} from './remoteComponents';
 interface PluginHostProps {
   pluginId: string;
   src: string;
+  /**
+   * Whether this plugin is in the foreground. The thread and iframe stay alive
+   * regardless; this only gates whether the plugin's contributed component tree
+   * (toolbar section, modal) is rendered into the chrome.
+   */
+  active: boolean;
 }
 
-export function PluginHost({pluginId, src}: PluginHostProps) {
+export function PluginHost({pluginId, src, active}: PluginHostProps) {
   const chrome = useChrome();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // One receiver per plugin: it stores the remote tree this plugin contributes.
@@ -59,10 +65,17 @@ export function PluginHost({pluginId, src}: PluginHostProps) {
       </div>
       {/*
         Renders the plugin's contributed remote tree. The toolbar-section and
-        modal components portal themselves into the chrome, so nothing of this
-        renders inline here — it's purely the bridge for the contributed UI.
+        modal components portal themselves into the chrome, so nothing renders
+        inline here — it's purely the bridge for the contributed UI.
+
+        Only mounted while the plugin is in the foreground. When backgrounded the
+        thread stays alive and keeps updating `receiver`; re-mounting on
+        re-activation renders the receiver's current state, so contributions
+        reappear without a reload.
       */}
-      <RemoteRootRenderer receiver={receiver} components={components} />
+      {active && (
+        <RemoteRootRenderer receiver={receiver} components={components} />
+      )}
     </>
   );
 }

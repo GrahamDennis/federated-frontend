@@ -2,11 +2,15 @@ import type {AppDescriptor} from './apps';
 import {PluginHost} from './PluginHost';
 
 /**
- * Renders the currently-active app inside a titlebar "card". Integrated plugins
- * go through {@link PluginHost} (which wires up the thread + remote-dom);
- * external apps are plain sandboxed iframes with no channel to the host.
+ * Renders an app inside a titlebar "card". Integrated plugins go through
+ * {@link PluginHost} (which wires up the thread + remote-dom); external apps are
+ * plain sandboxed iframes with no channel to the host.
+ *
+ * `active` indicates whether this app is currently in the foreground. The app
+ * stays mounted regardless (kept alive by the chrome), but plugins only surface
+ * their contributed UI while active.
  */
-export function AppView({app}: {app: AppDescriptor}) {
+export function AppView({app, active}: {app: AppDescriptor; active: boolean}) {
   return (
     <section className="app-card">
       <div className="app-titlebar">
@@ -21,7 +25,7 @@ export function AppView({app}: {app: AppDescriptor}) {
       </div>
 
       {app.kind === 'plugin' ? (
-        <PluginHost pluginId={app.id} src={app.src} />
+        <PluginHost pluginId={app.id} src={app.src} active={active} />
       ) : (
         <div className="app-frame">
           <iframe

@@ -44,7 +44,19 @@ let nextToastId = 1;
 
 export function Chrome({apps}: {apps: AppDescriptor[]}) {
   const [activeAppId, setActiveAppId] = useState(apps[0]?.id);
-  const activeApp = apps.find((app) => app.id === activeAppId) ?? apps[0];
+
+  // Apps that stay mounted (alive) even when not visible, kept in
+  // most-recently-used order (front = most recent). Keeping this ordered makes a
+  // future eviction policy easy to add: cap the number of backgrounded apps
+  // and/or drop ones that have been backgrounded past some timeout.
+  const [aliveAppIds, setAliveAppIds] = useState<string[]>(() =>
+    apps[0] ? [apps[0].id] : [],
+  );
+
+  const activateApp = useCallback((id: string) => {
+    setActiveAppId(id);
+    setAliveAppIds((prev) => [id, ...prev.filter((existing) => existing !== id)]);
+  }, []);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   // Commands are keyed by the contributing plugin so a plugin reloading or
@@ -79,9 +91,12 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     [],
   );
 
-  const allCommands = useMemo(
-    () => [...commandsByPlugin.values()].flat(),
-    [commandsByPlugin],
+  // Only the active app contributes to the palette. Backgrounded apps stay alive
+  // (their thread keeps running) but their commands aren't surfaced until they're
+  // foregrounded again.
+  const activeCommands = useMemo(
+    () => (activeAppId ? (commandsByPlugin.get(activeAppId) ?? []) : []),
+    [commandsByPlugin, activeAppId],
   );
 
   // Global Cmd/Ctrl-K toggles the command palette.
@@ -122,37 +137,49 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
               <button
                 key={app.id}
                 className={`app-rail-item${app.id === activeAppId ? ' active' : ''}`}
-                onClick={() => setActiveAppId(app.id)}
+                onClick={() => activateApp(app.id)}
               >
                 <span className="app-rail-name">{app.name}</span>
                 <span className="app-rail-kind">
                   {app.kind === 'plugin' ? 'integrated' : 'external'}
+                  {aliveAppIds.includes(app.id) && app.id !== activeAppId
+                    ? ' · running'
+                    : ''}
                 </span>
               </button>
             ))}
           </nav>
 
           <main className="content">
-            {activeApp && (
-              <div className="workspace">
-                {activeApp.description && (
-                  <p className="workspace-hint">{activeApp.description}</p>
-                )}
-                {/*
-                  Keyed by app id so switching fully unmounts the previous app.
-                  For a plugin that runs its cleanup: the thread closes and its
-                  contributed commands/toolbar are removed from the chrome.
-                */}
-                <AppView key={activeApp.id} app={activeApp} />
-              </div>
-            )}
+            {/*
+              Every app that has ever been activated stays mounted (kept alive),
+              and is simply hidden while another app is in the foreground — so its
+              iframe, thread and state survive switches. Rendered in registry order
+              so panes never reorder in the DOM. AppView gates the *contributions*
+              (toolbar/modal) on `active`, so a backgrounded plugin keeps running
+              without cluttering the chrome.
+            */}
+            {apps
+              .filter((app) => aliveAppIds.includes(app.id))
+              .map((app) => (
+                <div
+                  key={app.id}
+                  className="workspace"
+                  hidden={app.id !== activeAppId}
+                >
+                  {app.description && (
+                    <p className="workspace-hint">{app.description}</p>
+                  )}
+                  <AppView app={app} active={app.id === activeAppId} />
+                </div>
+              ))}
           </main>
         </div>
 
         <ToastRegion toasts={toasts} />
         {paletteOpen && (
           <CommandPalette
-            commands={allCommands}
+            commands={activeCommands}
             onClose={() => setPaletteOpen(false)}
           />
         )}
