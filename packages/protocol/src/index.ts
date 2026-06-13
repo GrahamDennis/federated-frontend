@@ -7,6 +7,7 @@ import type {RemoteConnection} from '@remote-dom/core/elements';
  */
 export const HOST_ORIGIN = 'http://localhost:5173';
 export const PLUGIN_ORIGIN = 'http://localhost:5174';
+export const MAP_PLUGIN_ORIGIN = 'http://localhost:5175';
 
 export type ToastTone = 'info' | 'success' | 'critical';
 

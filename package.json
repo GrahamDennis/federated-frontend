@@ -7,11 +7,12 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n host,plugin -c cyan,magenta \"npm:dev:host\" \"npm:dev:plugin\"",
+    "dev": "concurrently -n host,notes,map -c cyan,magenta,green \"npm:dev:host\" \"npm:dev:plugin\" \"npm:dev:map\"",
     "dev:host": "npm run dev -w @ff/host",
     "dev:plugin": "npm run dev -w @ff/plugin-example",
-    "build": "npm run build -w @ff/protocol && npm run build -w @ff/host && npm run build -w @ff/plugin-example",
-    "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p packages/host/tsconfig.json && tsc --noEmit -p packages/plugin-example/tsconfig.json",
+    "dev:map": "npm run dev -w @ff/plugin-map",
+    "build": "npm run build -w @ff/protocol && npm run build -w @ff/host && npm run build -w @ff/plugin-example && npm run build -w @ff/plugin-map",
+    "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p packages/host/tsconfig.json && tsc --noEmit -p packages/plugin-example/tsconfig.json && tsc --noEmit -p packages/plugin-map/tsconfig.json",
     "test": "playwright test",
     "test:ui": "playwright test --ui"
   },

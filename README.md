@@ -33,6 +33,8 @@ packages/
                     the host-side component kit (RemoteRootRenderer + component map).
   plugin-example/   :5174  An untrusted plugin. Its own in-iframe UI, plus a contributed
                     remote-dom tree (toolbar + modal) and two ⌘K commands.
+  plugin-map/       :5175  A MapLibre GL map plugin. Uses only the capability API
+                    (⌘K fly-to commands + toasts) — no remote-dom contributions.
 ```
 
 The host and plugin run on **different origins** (`:5173` vs `:5174`) so the
@@ -68,6 +70,10 @@ via the left app rail. Two kinds:
 
 - **`plugin`** — integrated, loaded via `PluginHost` (thread + remote-dom).
 - **`external`** — a plain sandboxed iframe with no host integration (e.g. Google).
+
+The registry ships three: **Example Notes** (remote-dom + capability API), **World
+Map** (a MapLibre GL map that uses *only* the capability API — ⌘K fly-to commands
+and toasts, no remote-dom), and **Google** (external).
 
 Apps are **kept alive**: once activated, an app stays mounted and is merely hidden
 when another app is foregrounded, so its iframe, thread, and state survive
@@ -122,6 +128,9 @@ exercising the cross-origin channels rather than mocking them:
 - `tests/standalone.spec.ts` — loading the plugin directly: it detects standalone
   mode and its own chrome, toasts/modal/command-palette all work, and the
   host-only "switch app" capability is correctly unavailable.
+- `tests/map.spec.ts` — the MapLibre plugin hosted (renders, detects hosted, flying
+  raises a host toast, registers per-app ⌘K commands) and standalone (map + controls
+  still work, no host required).
 
 The Playwright config (`playwright.config.ts`) auto-starts both dev servers via
 `webServer`, so `npm test` is self-contained. It drives the locally installed
@@ -153,6 +162,16 @@ npm run test:ui     # interactive Playwright UI
   single `@types/react@19` to avoid duplicate-React-types errors.
 - **`StrictMode` is intentionally omitted** in the host — its dev-only double
   invocation of effects would tear down and recreate the iframe/thread mid-handshake.
+- **Contributions are declarative.** A plugin streams its remote-dom tree to the
+  host via a `<RemoteContributions>` React component whose effect observes on mount
+  and `disconnect({empty: true})`s on unmount, and registers its ⌘K commands in an
+  effect too. Tying this to React's lifecycle (rather than an imperative
+  `createRoot` + `observe` at module scope) is what keeps HMR / Fast Refresh from
+  stacking duplicate toolbars — the old tree is torn out before a new one mounts.
+- **`@quilted/threads` gotcha:** an imports proxy has no `then` guard, so never
+  return it bare from an `async` function — `Promise.resolve` will thenable-check
+  it, accessing `.then` and firing a phantom remote `then()` call. Wrap it (e.g.
+  `return {host}`) or nest it inside a plain object.
 - **Sandbox**: `allow-scripts allow-same-origin`. `allow-same-origin` gives the
   iframe *its own* origin (`:5174`), not the host's; since that differs from the
   host origin, the two remain isolated by the browser while still allowing targeted

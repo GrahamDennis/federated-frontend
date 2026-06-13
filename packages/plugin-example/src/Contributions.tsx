@@ -1,16 +1,40 @@
+import {useEffect} from 'react';
 import {usePlatform} from './platform';
 import {useStore, setState} from './store';
 
 /**
- * The surfaces this plugin contributes beyond its own page: a toolbar section
- * and a whole-window modal. Written once against the platform's component kit —
- * hosted, these are remote-dom elements the host renders into its chrome;
- * standalone, they're local components the plugin renders into its own chrome.
+ * The surfaces this plugin contributes beyond its own page: a toolbar section, a
+ * whole-window modal, and command-palette entries. Written once against the
+ * platform's component kit — hosted, the toolbar/modal are remote-dom elements
+ * the host renders into its chrome; standalone, they're local components the
+ * plugin renders into its own chrome. Commands are registered in an effect, so
+ * they're tied to this component's lifecycle (and cleared on unmount).
  */
 export function Contributions() {
   const platform = usePlatform();
   const {Toolbar, Modal, Button, Stack, Text} = platform.components;
   const modalOpen = useStore((s) => s.modalOpen);
+
+  useEffect(() => {
+    platform.setCommands([
+      {
+        id: 'notes.hello',
+        title: 'Notes: Say hello',
+        subtitle: 'Show a toast',
+        run: () =>
+          platform.toast('👋 Hello from the example plugin!', {
+            tone: 'success',
+          }),
+      },
+      {
+        id: 'notes.details',
+        title: 'Notes: Open details',
+        subtitle: 'Open the details modal',
+        run: () => setState({modalOpen: true}),
+      },
+    ]);
+    return () => platform.setCommands([]);
+  }, [platform]);
 
   return (
     <>

@@ -39,5 +39,12 @@ export default defineConfig({
       stdout: 'ignore',
       stderr: 'pipe',
     },
+    {
+      command: 'npm run dev:map',
+      url: 'http://localhost:5175',
+      reuseExistingServer: !process.env.CI,
+      stdout: 'ignore',
+      stderr: 'pipe',
+    },
   ],
 });

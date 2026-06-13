@@ -1,4 +1,4 @@
-import {PLUGIN_ORIGIN} from '@ff/protocol';
+import {MAP_PLUGIN_ORIGIN, PLUGIN_ORIGIN} from '@ff/protocol';
 
 /**
  * An app the chrome can host. `plugin` apps integrate with the chrome over the
@@ -21,6 +21,14 @@ export const APPS: AppDescriptor[] = [
     src: PLUGIN_ORIGIN,
     description:
       'An integrated plugin: it contributes a toolbar section, ⌘K commands, toasts, and a whole-window modal to this chrome.',
+  },
+  {
+    id: 'world-map',
+    name: 'World Map',
+    kind: 'plugin',
+    src: MAP_PLUGIN_ORIGIN,
+    description:
+      'A MapLibre GL map (an integrated plugin). It uses only the capability API: it registers ⌘K fly-to commands and raises toasts, with no remote-dom contributions.',
   },
   {
     id: 'google',

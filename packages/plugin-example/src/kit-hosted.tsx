@@ -1,4 +1,5 @@
-import {createRoot} from 'react-dom/client';
+import {useEffect, useState, type ReactNode} from 'react';
+import {createPortal} from 'react-dom';
 import {createRemoteComponent} from '@remote-dom/react';
 import {RemoteMutationObserver} from '@remote-dom/core/elements';
 import type {RemoteConnection} from '@remote-dom/core/elements';
@@ -12,9 +13,7 @@ import {
   ModalElement,
   ToolbarSectionElement,
 } from '@ff/protocol/elements';
-import {Contributions} from './Contributions';
 import {
-  PlatformProvider,
   type ComponentKit,
   type Platform,
 } from './platform';
@@ -59,15 +58,8 @@ const hostedKit: ComponentKit = {
   ) as unknown as ComponentKit['Toolbar'],
 };
 
-/**
- * Build the hosted platform and start streaming the plugin's contributed
- * component tree to the host over the given remote-dom connection.
- */
-export function createHostedPlatform(
-  host: ThreadImports<HostThread>,
-  connection: RemoteConnection,
-): Platform {
-  const platform: Platform = {
+export function createHostedPlatform(host: ThreadImports<HostThread>): Platform {
+  return {
     mode: 'hosted',
     toast: (message, options) => void host.toast(message, options),
     setCommands: (commands) => void host.setCommands(commands),
@@ -75,17 +67,33 @@ export function createHostedPlatform(
     listApps: () => host.listApps(),
     switchApp: (appId) => void host.activateApp(appId),
   };
+}
 
-  // Observe a detached container so only the contribution tree crosses the
-  // boundary (not the plugin's own in-iframe UI).
-  const container = document.createElement('div');
-  const observer = new RemoteMutationObserver(connection);
-  observer.observe(container);
-  createRoot(container).render(
-    <PlatformProvider value={platform}>
-      <Contributions />
-    </PlatformProvider>,
-  );
+/**
+ * Streams its `children` (a remote-dom tree built from the hosted kit) to the
+ * host over `connection`, declaratively. Rendering it as part of the React tree
+ * means React owns its lifecycle: the observer is created on mount and, on
+ * unmount, `disconnect({empty: true})` removes the contributed tree from the
+ * host. That's what keeps HMR / Fast Refresh from stacking duplicate toolbars —
+ * the old tree is torn down before a new one is observed.
+ */
+export function RemoteContributions({
+  connection,
+  children,
+}: {
+  connection: RemoteConnection;
+  children: ReactNode;
+}) {
+  // A stable detached container the children are portaled into and the observer
+  // watches. Only the contribution tree crosses the boundary — not the plugin's
+  // own in-iframe UI.
+  const [container] = useState(() => document.createElement('div'));
 
-  return platform;
+  useEffect(() => {
+    const observer = new RemoteMutationObserver(connection);
+    observer.observe(container);
+    return () => observer.disconnect({empty: true});
+  }, [connection, container]);
+
+  return createPortal(children, container);
 }
