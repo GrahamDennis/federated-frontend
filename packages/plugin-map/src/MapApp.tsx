@@ -57,17 +57,37 @@ export function MapApp({
     };
   }, []);
 
-  const flyTo = useCallback(
+  // Move the camera only (used both for local clicks and when the shared
+  // selection changes elsewhere). Guarded by id so context echoes don't reanimate.
+  const lastFlownId = useRef<string | null>(null);
+  const flyCamera = useCallback((place: Place) => {
+    if (lastFlownId.current === place.id) return;
+    lastFlownId.current = place.id;
+    mapRef.current?.flyTo({
+      center: place.center,
+      zoom: place.zoom,
+      essential: true,
+    });
+    setStatus(`Flying to ${place.name}`);
+  }, []);
+
+  // A user selecting a city: move the camera, toast, and publish the selection
+  // to the shared context so companion apps (e.g. Places) can react.
+  const selectPlace = useCallback(
     (place: Place) => {
-      mapRef.current?.flyTo({
-        center: place.center,
-        zoom: place.zoom,
-        essential: true,
-      });
-      setStatus(`Flying to ${place.name}`);
+      flyCamera(place);
       void host?.toast(`🗺️ Flying to ${place.name}`, {tone: 'info'});
+      void host?.setContext({
+        selectedPlace: {
+          id: place.id,
+          name: place.name,
+          longitude: place.center[0],
+          latitude: place.center[1],
+          zoom: place.zoom,
+        },
+      });
     },
-    [host],
+    [host, flyCamera],
   );
 
   // When hosted, contribute fly-to commands to the host's command palette.
@@ -78,10 +98,36 @@ export function MapApp({
         id: `map.fly.${place.id}`,
         title: `Map: Fly to ${place.name}`,
         subtitle: 'Pan the map to this city',
-        run: () => flyTo(place),
+        run: () => selectPlace(place),
       })),
     );
-  }, [host, flyTo]);
+    return () => void host.setCommands([]);
+  }, [host, selectPlace]);
+
+  // React to the shared selection changing elsewhere (e.g. Places clearing it,
+  // or — in a fuller app — another view selecting a place): move the camera.
+  useEffect(() => {
+    if (!host) return;
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+    void (async () => {
+      const apply = (placeId: string | null | undefined) => {
+        const place = PLACES.find((p) => p.id === placeId);
+        if (place) flyCamera(place);
+      };
+      const context = await host.getContext();
+      if (!cancelled) apply(context.selectedPlace?.id);
+      const off = await host.subscribeContext((context) =>
+        apply(context.selectedPlace?.id),
+      );
+      if (cancelled) off();
+      else unsubscribe = off;
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [host, flyCamera]);
 
   return (
     <div className="map-app">
@@ -95,7 +141,7 @@ export function MapApp({
         </div>
         <div className="map-buttons">
           {PLACES.map((place) => (
-            <button key={place.id} onClick={() => flyTo(place)}>
+            <button key={place.id} onClick={() => selectPlace(place)}>
               {place.name}
             </button>
           ))}

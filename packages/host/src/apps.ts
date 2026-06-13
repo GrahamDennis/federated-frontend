@@ -1,4 +1,8 @@
-import {MAP_PLUGIN_ORIGIN, PLUGIN_ORIGIN} from '@ff/protocol';
+import {
+  MAP_PLUGIN_ORIGIN,
+  PLACES_PLUGIN_ORIGIN,
+  PLUGIN_ORIGIN,
+} from '@ff/protocol';
 
 /**
  * An app the chrome can host. `plugin` apps integrate with the chrome over the
@@ -11,6 +15,10 @@ export interface AppDescriptor {
   kind: 'plugin' | 'external';
   src: string;
   description?: string;
+  /** Companion apps that can be docked as a subordinate detail panel. */
+  detailApps?: string[];
+  /** Marks an app as a detail-only companion: hidden from the main rail. */
+  detail?: boolean;
 }
 
 export const APPS: AppDescriptor[] = [
@@ -29,6 +37,18 @@ export const APPS: AppDescriptor[] = [
     src: MAP_PLUGIN_ORIGIN,
     description:
       'A MapLibre GL map (an integrated plugin). It uses only the capability API: it registers ⌘K fly-to commands and raises toasts, with no remote-dom contributions.',
+    // Can dock the Places panel as a subordinate detail view that reflects the
+    // map's current selection via the shared workspace context.
+    detailApps: ['places'],
+  },
+  {
+    id: 'places',
+    name: 'Places',
+    kind: 'plugin',
+    src: PLACES_PLUGIN_ORIGIN,
+    detail: true,
+    description:
+      'A detail companion: it reflects and annotates the place currently selected in the shared workspace context.',
   },
   {
     id: 'google',

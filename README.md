@@ -35,6 +35,8 @@ packages/
                     remote-dom tree (toolbar + modal) and two ⌘K commands.
   plugin-map/       :5175  A MapLibre GL map plugin. Uses only the capability API
                     (⌘K fly-to commands + toasts) — no remote-dom contributions.
+  plugin-places/    :5176  A subordinate "detail" companion that reflects/annotates
+                    the place selected in the shared workspace context.
 ```
 
 The host and plugin run on **different origins** (`:5173` vs `:5174`) so the
@@ -91,6 +93,31 @@ The host chrome (nav + app rail) renders **above** plugin-contributed modals, so
 an untrusted plugin can't cover the whole window and trap the user — they can
 always switch apps or open ⌘K.
 
+### Composed workspaces: shared context + a detail companion
+
+This is the part that justifies a chrome over native tabs — composing multiple
+apps around the *same data*. The host exposes a domain-agnostic **shared context**
+broker (`getContext` / `setContext` / `subscribeContext` on `HostThread`): it
+stores a bag and broadcasts changes; the apps agree on its shape.
+
+The **World Map** (hub) publishes the selected place to the context; the
+**Places** panel (a `detail`-only companion, hidden from the rail) subscribes and
+reflects/annotates it, and can clear it back — bidirectional, across two separate
+cross-origin iframes. Activate the map and toggle **Places panel** in the nav to
+dock it as a subordinate pane:
+
+- **Layout** — a two-pane grid (`primary | detail`). Every kept-alive app is a
+  grid child positioned purely by class (`pane-primary` / `pane-detail` /
+  `pane-hidden`), never reparented, so switching apps and opening/closing the
+  detail panel never reloads an iframe.
+- **Unified palette** — ⌘K spans the apps currently in the foreground (primary +
+  detail), so the composed workspace has one command surface (e.g. the map's
+  fly-to commands and the Places "Clear selection" command together).
+
+A `detail` app declares nothing special; the parent lists it in `detailApps`. The
+companion still runs standalone (open http://localhost:5176) — it just has no
+shared selection to reflect, and says so.
+
 > The Google entry uses `https://www.google.com/webhp?igu=1`. Plain
 > `https://google.com` refuses to be framed (`X-Frame-Options` / CSP
 > `frame-ancestors`); `igu=1` is Google's frameable embed endpoint.
@@ -131,6 +158,9 @@ exercising the cross-origin channels rather than mocking them:
 - `tests/map.spec.ts` — the MapLibre plugin hosted (renders, detects hosted, flying
   raises a host toast, registers per-app ⌘K commands) and standalone (map + controls
   still work, no host required).
+- `tests/shared-context.spec.ts` — docking the Places detail panel beside the map;
+  a map selection reflecting in Places and a Places "clear" propagating back; the
+  ⌘K palette spanning both composed apps; Places standalone.
 
 The Playwright config (`playwright.config.ts`) auto-starts both dev servers via
 `webServer`, so `npm test` is self-contained. It drives the locally installed

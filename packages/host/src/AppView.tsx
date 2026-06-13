@@ -10,17 +10,29 @@ import {PluginHost} from './PluginHost';
  * stays mounted regardless (kept alive by the chrome), but plugins only surface
  * their contributed UI while active.
  */
-export function AppView({app, active}: {app: AppDescriptor; active: boolean}) {
+export function AppView({
+  app,
+  active,
+  subordinate = false,
+}: {
+  app: AppDescriptor;
+  active: boolean;
+  subordinate?: boolean;
+}) {
   return (
-    <section className="app-card">
+    <section className={`app-card${subordinate ? ' subordinate' : ''}`}>
       <div className="app-titlebar">
         <span className={`app-dot ${app.kind}`} />
         <span className="app-titlebar-name">{app.name}</span>
-        <span className="app-titlebar-origin">{new URL(app.src).origin}</span>
+        {!subordinate && (
+          <span className="app-titlebar-origin">{new URL(app.src).origin}</span>
+        )}
         <span className={`app-badge ${app.kind}`}>
-          {app.kind === 'plugin'
-            ? 'integrated plugin'
-            : 'external · no integration'}
+          {subordinate
+            ? 'detail'
+            : app.kind === 'plugin'
+              ? 'integrated plugin'
+              : 'external · no integration'}
         </span>
       </div>
 

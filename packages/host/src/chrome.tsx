@@ -7,7 +7,12 @@ import {
   useRef,
   useState,
 } from 'react';
-import type {CommandDescriptor, ToastOptions, ToastTone} from '@ff/protocol';
+import type {
+  CommandDescriptor,
+  SharedContext,
+  ToastOptions,
+  ToastTone,
+} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
 import {AppView} from './AppView';
 
@@ -24,6 +29,10 @@ interface ChromeContextValue {
   apps: AppDescriptor[];
   /** Bring an app to the foreground. */
   activateApp(appId: string): void;
+  /** Shared workspace context (broker for composing apps around one selection). */
+  getSharedContext(): SharedContext;
+  setSharedContext(patch: SharedContext): void;
+  subscribeSharedContext(listener: (context: SharedContext) => void): () => void;
   /** DOM node in the top nav where plugins portal their toolbar sections. */
   toolbarSlot: HTMLElement | null;
   /** DOM node (full-window overlay) where plugins portal modals/popovers. */
@@ -57,10 +66,53 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     apps[0] ? [apps[0].id] : [],
   );
 
-  const activateApp = useCallback((id: string) => {
-    setActiveAppId(id);
-    setAliveAppIds((prev) => [id, ...prev.filter((existing) => existing !== id)]);
+  // An optional subordinate "detail" companion docked beside the primary app.
+  const [detailAppId, setDetailAppId] = useState<string | null>(null);
+
+  const activateApp = useCallback(
+    (id: string) => {
+      setActiveAppId(id);
+      setAliveAppIds((prev) => [
+        id,
+        ...prev.filter((existing) => existing !== id),
+      ]);
+      // Drop the detail companion if the newly-active app doesn't own it (or the
+      // detail app itself was just promoted to primary).
+      setDetailAppId((current) => {
+        if (!current || current === id) return null;
+        const next = apps.find((app) => app.id === id);
+        return next?.detailApps?.includes(current) ? current : null;
+      });
+    },
+    [apps],
+  );
+
+  const openDetail = useCallback((id: string) => {
+    setDetailAppId(id);
+    setAliveAppIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
   }, []);
+
+  // Host-mediated shared context. A ref backs the synchronous getter; a set of
+  // subscribers is notified on every change.
+  const sharedContextRef = useRef<SharedContext>({});
+  const contextSubscribers = useRef(new Set<(context: SharedContext) => void>());
+
+  const getSharedContext = useCallback(() => sharedContextRef.current, []);
+  const setSharedContext = useCallback((patch: SharedContext) => {
+    sharedContextRef.current = {...sharedContextRef.current, ...patch};
+    for (const listener of contextSubscribers.current) {
+      listener(sharedContextRef.current);
+    }
+  }, []);
+  const subscribeSharedContext = useCallback(
+    (listener: (context: SharedContext) => void) => {
+      contextSubscribers.current.add(listener);
+      return () => {
+        contextSubscribers.current.delete(listener);
+      };
+    },
+    [],
+  );
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   // Commands are keyed by the contributing plugin so a plugin reloading or
@@ -95,12 +147,16 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     [],
   );
 
-  // Only the active app contributes to the palette. Backgrounded apps stay alive
-  // (their thread keeps running) but their commands aren't surfaced until they're
-  // foregrounded again.
+  // The palette spans the apps currently in the foreground — the primary app and
+  // the open detail companion — so a composed workspace has one unified command
+  // surface. Backgrounded apps stay alive but their commands aren't surfaced.
+  const visibleAppIds = useMemo(
+    () => [activeAppId, detailAppId].filter((id): id is string => Boolean(id)),
+    [activeAppId, detailAppId],
+  );
   const activeCommands = useMemo(
-    () => (activeAppId ? (commandsByPlugin.get(activeAppId) ?? []) : []),
-    [commandsByPlugin, activeAppId],
+    () => visibleAppIds.flatMap((id) => commandsByPlugin.get(id) ?? []),
+    [commandsByPlugin, visibleAppIds],
   );
 
   // Global Cmd/Ctrl-K toggles the command palette.
@@ -123,11 +179,26 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       setCommandsForPlugin,
       apps,
       activateApp,
+      getSharedContext,
+      setSharedContext,
+      subscribeSharedContext,
       toolbarSlot,
       modalLayer,
     }),
-    [toast, setCommandsForPlugin, apps, activateApp, toolbarSlot, modalLayer],
+    [
+      toast,
+      setCommandsForPlugin,
+      apps,
+      activateApp,
+      getSharedContext,
+      setSharedContext,
+      subscribeSharedContext,
+      toolbarSlot,
+      modalLayer,
+    ],
   );
+
+  const activeApp = apps.find((app) => app.id === activeAppId);
 
   return (
     <ChromeContext.Provider value={value}>
@@ -136,6 +207,21 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
           <div className="brand">▦ Federated Frontend</div>
           {/* Plugins portal toolbar sections into this slot. */}
           <div className="toolbar-slot" ref={setToolbarSlot} />
+          {/* Toggles to dock a subordinate "detail" companion of the active app. */}
+          {activeApp?.detailApps?.map((detailId) => {
+            const companion = apps.find((app) => app.id === detailId);
+            if (!companion) return null;
+            const open = detailAppId === detailId;
+            return (
+              <button
+                key={detailId}
+                className={`detail-toggle${open ? ' active' : ''}`}
+                onClick={() => (open ? setDetailAppId(null) : openDetail(detailId))}
+              >
+                {open ? '▣' : '▢'} {companion.name} panel
+              </button>
+            );
+          })}
           <button className="cmdk-button" onClick={() => setPaletteOpen(true)}>
             Search & commands <kbd>⌘K</kbd>
           </button>
@@ -144,46 +230,56 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
         <div className="body">
           <nav className="app-rail">
             <div className="app-rail-heading">Apps</div>
-            {apps.map((app) => (
-              <button
-                key={app.id}
-                className={`app-rail-item${app.id === activeAppId ? ' active' : ''}`}
-                onClick={() => activateApp(app.id)}
-              >
-                <span className="app-rail-name">{app.name}</span>
-                <span className="app-rail-kind">
-                  {app.kind === 'plugin' ? 'integrated' : 'external'}
-                  {aliveAppIds.includes(app.id) && app.id !== activeAppId
-                    ? ' · running'
-                    : ''}
-                </span>
-              </button>
-            ))}
+            {/* Companion (detail-only) apps are opened from the active app, not the rail. */}
+            {apps
+              .filter((app) => !app.detail)
+              .map((app) => (
+                <button
+                  key={app.id}
+                  className={`app-rail-item${app.id === activeAppId ? ' active' : ''}`}
+                  onClick={() => activateApp(app.id)}
+                >
+                  <span className="app-rail-name">{app.name}</span>
+                  <span className="app-rail-kind">
+                    {app.kind === 'plugin' ? 'integrated' : 'external'}
+                    {aliveAppIds.includes(app.id) && app.id !== activeAppId
+                      ? ' · running'
+                      : ''}
+                  </span>
+                </button>
+              ))}
           </nav>
 
           <main className="content">
             {/*
-              Every app that has ever been activated stays mounted (kept alive),
-              and is simply hidden while another app is in the foreground — so its
-              iframe, thread and state survive switches. Rendered in registry order
-              so panes never reorder in the DOM. AppView gates the *contributions*
-              (toolbar/modal) on `active`, so a backgrounded plugin keeps running
-              without cluttering the chrome.
+              Every activated app stays mounted (kept alive) and is positioned by
+              CSS into the primary pane, the docked detail pane, or hidden — purely
+              via a class, never reparented, so iframes/threads/state survive both
+              switches and detail open/close. AppView renders contributions for any
+              visible app (primary or detail), so the foreground composition drives
+              the chrome.
             */}
-            {apps
-              .filter((app) => aliveAppIds.includes(app.id))
-              .map((app) => (
-                <div
-                  key={app.id}
-                  className="workspace"
-                  hidden={app.id !== activeAppId}
-                >
-                  {app.description && (
-                    <p className="workspace-hint">{app.description}</p>
-                  )}
-                  <AppView app={app} active={app.id === activeAppId} />
-                </div>
-              ))}
+            <div className={`panes${detailAppId ? ' has-detail' : ''}`}>
+              {apps
+                .filter((app) => aliveAppIds.includes(app.id))
+                .map((app) => {
+                  const role =
+                    app.id === activeAppId
+                      ? 'primary'
+                      : app.id === detailAppId
+                        ? 'detail'
+                        : 'hidden';
+                  return (
+                    <section key={app.id} className={`pane pane-${role}`}>
+                      <AppView
+                        app={app}
+                        active={role !== 'hidden'}
+                        subordinate={role === 'detail'}
+                      />
+                    </section>
+                  );
+                })}
+            </div>
           </main>
         </div>
 

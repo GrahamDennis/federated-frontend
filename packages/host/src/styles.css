@@ -171,6 +171,49 @@ code {
   min-width: 0;
 }
 
+/* Primary + optional detail panes. Each alive app is a grid child positioned by
+   class (never reparented), so keep-alive survives switches and detail toggles. */
+.panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
+}
+.panes.has-detail {
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+.pane-primary {
+  grid-column: 1;
+  min-width: 0;
+}
+.pane-detail {
+  grid-column: 2;
+  min-width: 0;
+}
+.pane-hidden {
+  display: none;
+}
+
+.detail-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-2);
+  color: var(--subdued);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.detail-toggle:hover {
+  color: var(--text);
+}
+.detail-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .workspace {
   max-width: 920px;
   margin: 0 auto;
@@ -200,6 +243,14 @@ code {
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
+}
+/* The docked detail companion reads as subordinate to the primary app. */
+.app-card.subordinate {
+  border-color: var(--accent);
+}
+.app-card.subordinate .app-badge {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .app-titlebar {

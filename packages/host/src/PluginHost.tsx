@@ -31,6 +31,11 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
     const iframe = iframeRef.current;
     if (!iframe) return;
 
+    // Unsubscribe handles for context listeners this plugin registered, so they
+    // can be dropped when the plugin unmounts (belt-and-suspenders alongside the
+    // unsubscribe returned to the plugin).
+    const contextUnsubscribes = new Set<() => void>();
+
     const hostExports: HostThread = {
       connect: async () => receiver.connection,
       toast: async (message, options) =>
@@ -42,6 +47,16 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
           .filter((app) => app.id !== pluginId)
           .map((app) => ({id: app.id, name: app.name})),
       activateApp: async (appId) => chromeRef.current.activateApp(appId),
+      getContext: async () => chromeRef.current.getSharedContext(),
+      setContext: async (patch) => chromeRef.current.setSharedContext(patch),
+      subscribeContext: async (listener) => {
+        const unsubscribe = chromeRef.current.subscribeSharedContext(listener);
+        contextUnsubscribes.add(unsubscribe);
+        return () => {
+          contextUnsubscribes.delete(unsubscribe);
+          unsubscribe();
+        };
+      },
     };
 
     const thread = ThreadWindow.iframe<Record<string, never>, HostThread>(
@@ -54,6 +69,7 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
 
     return () => {
       thread.close();
+      for (const unsubscribe of contextUnsubscribes) unsubscribe();
       chromeRef.current.setCommandsForPlugin(pluginId, []);
     };
   }, [pluginId, src, receiver]);

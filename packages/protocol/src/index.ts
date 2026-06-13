@@ -8,6 +8,7 @@ import type {RemoteConnection} from '@remote-dom/core/elements';
 export const HOST_ORIGIN = 'http://localhost:5173';
 export const PLUGIN_ORIGIN = 'http://localhost:5174';
 export const MAP_PLUGIN_ORIGIN = 'http://localhost:5175';
+export const PLACES_PLUGIN_ORIGIN = 'http://localhost:5176';
 
 export type ToastTone = 'info' | 'success' | 'critical';
 
@@ -54,6 +55,40 @@ export interface HostApi {
   listApps(): Promise<AppSummary[]>;
   /** Ask the shell to bring another app to the foreground. Host-only. */
   activateApp(appId: string): Promise<void>;
+
+  /**
+   * Shared workspace context, host-mediated. This is how multiple apps composed
+   * into one workspace cohere around the same data (e.g. a "current selection").
+   * The host is the domain-agnostic broker: it stores a bag and broadcasts
+   * changes; the apps agree on its shape (see {@link SharedContext}).
+   */
+  getContext(): Promise<SharedContext>;
+  /** Shallow-merge a patch into the shared context and notify subscribers. */
+  setContext(patch: SharedContext): Promise<void>;
+  /**
+   * Subscribe to shared-context changes. Returns an unsubscribe function. The
+   * listener is also dropped automatically when this app's thread closes.
+   */
+  subscribeContext(
+    listener: (context: SharedContext) => void,
+  ): Promise<() => void>;
+}
+
+/**
+ * The shared-context shape these example apps agree on. The host treats it
+ * opaquely; only the apps interpret it. `selectedPlace` is the "current
+ * selection" the map (hub) publishes and the Places panel (detail) reflects.
+ */
+export interface SharedContext {
+  selectedPlace?: SelectedPlace | null;
+}
+
+export interface SelectedPlace {
+  id: string;
+  name: string;
+  longitude: number;
+  latitude: number;
+  zoom?: number;
 }
 
 /** A sibling app surfaced to a plugin by {@link HostApi.listApps}. */

@@ -46,5 +46,12 @@ export default defineConfig({
       stdout: 'ignore',
       stderr: 'pipe',
     },
+    {
+      command: 'npm run dev:places',
+      url: 'http://localhost:5176',
+      reuseExistingServer: !process.env.CI,
+      stdout: 'ignore',
+      stderr: 'pipe',
+    },
   ],
 });

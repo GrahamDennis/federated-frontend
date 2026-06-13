@@ -1,0 +1,101 @@
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: #1b1f24;
+  background: #fbfcfd;
+}
+
+.places {
+  padding: 16px 18px;
+}
+
+.places-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.places-header h1 {
+  font-size: 18px;
+  margin: 0;
+}
+.places-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5a626c;
+  border: 1px solid #c7ccd3;
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.places-badge.hosted {
+  color: #2f6fe0;
+  border-color: #2f6fe0;
+}
+
+.place-detail h2 {
+  font-size: 20px;
+  margin: 16px 0 8px;
+}
+
+.place-coords {
+  display: flex;
+  gap: 24px;
+  margin: 0 0 16px;
+}
+.place-coords div {
+  display: flex;
+  flex-direction: column;
+}
+.place-coords dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8a929c;
+}
+.place-coords dd {
+  margin: 2px 0 0;
+  font-family: ui-monospace, monospace;
+  font-size: 15px;
+}
+
+.notes-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #3a424c;
+}
+.notes-field textarea {
+  font: inherit;
+  min-height: 120px;
+  padding: 10px;
+  border: 1px solid #d4d8dd;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.clear-btn {
+  margin-top: 12px;
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #d4d8dd;
+  background: #fff;
+  cursor: pointer;
+}
+.clear-btn:hover {
+  border-color: #f0506e;
+  color: #f0506e;
+}
+
+.places-empty {
+  color: #5a626c;
+  line-height: 1.6;
+  margin-top: 18px;
+}
