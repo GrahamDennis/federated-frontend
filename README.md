@@ -118,6 +118,24 @@ A `detail` app declares nothing special; the parent lists it in `detailApps`. Th
 companion still runs standalone (open http://localhost:5176) — it just has no
 shared selection to reflect, and says so.
 
+### URL-addressable workspaces
+
+The workspace is encoded in the host URL, so a composed view is shareable /
+bookmarkable / reloadable — augmenting browser tabs rather than replacing them:
+
+```
+http://localhost:5173/?app=world-map&detail=places&ctx=<url-encoded JSON context>
+```
+
+The host owns the top-level URL (plugins are cross-origin iframes and can't touch
+it). On load it parses `app` / `detail` / `ctx` and seeds the chrome state + shared
+context (so apps that connect get the restored selection from `getContext()`); on
+every change it `replaceState`s the URL (`host/src/workspaceUrl.ts`). The default
+app and an empty context are omitted to keep URLs clean. The shared context is
+round-tripped as opaque JSON so the host stays domain-agnostic — and the map flies
+from the selection's own coordinates, so a deep-linked place need not be in its
+catalog.
+
 > The Google entry uses `https://www.google.com/webhp?igu=1`. Plain
 > `https://google.com` refuses to be framed (`X-Frame-Options` / CSP
 > `frame-ancestors`); `igu=1` is Google's frameable embed endpoint.
@@ -163,6 +181,9 @@ exercising the cross-origin channels rather than mocking them:
   ⌘K palette spanning both composed apps; Places standalone.
 - `tests/shortcuts.spec.ts` — ⌘K opens the palette and Escape closes it even while
   a cross-origin plugin iframe has focus (forwarded over the thread).
+- `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
+  switching apps, selecting a place, and docking the detail panel each update the
+  URL; the default app is omitted for clean URLs.
 
 The Playwright config (`playwright.config.ts`) auto-starts both dev servers via
 `webServer`, so `npm test` is self-contained. It drives the locally installed

@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import maplibregl from 'maplibre-gl';
 import type {ThreadImports} from '@quilted/threads';
-import type {HostThread} from '@ff/protocol';
+import type {HostThread, SelectedPlace} from '@ff/protocol';
 
 interface Place {
   id: string;
@@ -104,21 +104,28 @@ export function MapApp({
     return () => void host.setCommands([]);
   }, [host, selectPlace]);
 
-  // React to the shared selection changing elsewhere (e.g. Places clearing it,
-  // or — in a fuller app — another view selecting a place): move the camera.
+  // React to the shared selection changing elsewhere — e.g. a deep link seeding
+  // the selection on load, Places clearing it, or another view selecting a place.
+  // Fly from the selection's own coordinates so it works even for places not in
+  // this map's catalog.
   useEffect(() => {
     if (!host) return;
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
     void (async () => {
-      const apply = (placeId: string | null | undefined) => {
-        const place = PLACES.find((p) => p.id === placeId);
-        if (place) flyCamera(place);
+      const apply = (selected: SelectedPlace | null | undefined) => {
+        if (!selected) return;
+        flyCamera({
+          id: selected.id,
+          name: selected.name,
+          center: [selected.longitude, selected.latitude],
+          zoom: selected.zoom ?? 9,
+        });
       };
       const context = await host.getContext();
-      if (!cancelled) apply(context.selectedPlace?.id);
+      if (!cancelled) apply(context.selectedPlace);
       const off = await host.subscribeContext((context) =>
-        apply(context.selectedPlace?.id),
+        apply(context.selectedPlace),
       );
       if (cancelled) off();
       else unsubscribe = off;

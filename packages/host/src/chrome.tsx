@@ -16,6 +16,7 @@ import type {
 } from '@ff/protocol';
 import type {AppDescriptor} from './apps';
 import {AppView} from './AppView';
+import {readWorkspaceFromUrl, writeWorkspaceToUrl} from './workspaceUrl';
 
 /**
  * The host chrome's shared services. Plugin hosts get at these (via {@link useChrome})
@@ -59,18 +60,26 @@ interface Toast {
 let nextToastId = 1;
 
 export function Chrome({apps}: {apps: AppDescriptor[]}) {
-  const [activeAppId, setActiveAppId] = useState(apps[0]?.id);
+  // Initial workspace (primary app, docked detail, shared selection) comes from
+  // the URL, so deep links / reloads restore the composed view.
+  const initial = useMemo(() => readWorkspaceFromUrl(apps), [apps]);
+
+  const [activeAppId, setActiveAppId] = useState(initial.appId);
 
   // Apps that stay mounted (alive) even when not visible, kept in
   // most-recently-used order (front = most recent). Keeping this ordered makes a
   // future eviction policy easy to add: cap the number of backgrounded apps
   // and/or drop ones that have been backgrounded past some timeout.
-  const [aliveAppIds, setAliveAppIds] = useState<string[]>(() =>
-    apps[0] ? [apps[0].id] : [],
-  );
+  const [aliveAppIds, setAliveAppIds] = useState<string[]>(() => {
+    const ids = initial.appId ? [initial.appId] : [];
+    if (initial.detailId) ids.push(initial.detailId);
+    return ids;
+  });
 
   // An optional subordinate "detail" companion docked beside the primary app.
-  const [detailAppId, setDetailAppId] = useState<string | null>(null);
+  const [detailAppId, setDetailAppId] = useState<string | null>(
+    initial.detailId,
+  );
 
   const activateApp = useCallback(
     (id: string) => {
@@ -96,9 +105,12 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   }, []);
 
   // Host-mediated shared context. A ref backs the synchronous getter; a set of
-  // subscribers is notified on every change.
-  const sharedContextRef = useRef<SharedContext>({});
+  // subscribers is notified on every change. It's seeded from the URL so a deep
+  // link restores the selection. `contextVersion` bumps on every change so the
+  // URL-writing effect re-runs.
+  const sharedContextRef = useRef<SharedContext>(initial.context);
   const contextSubscribers = useRef(new Set<(context: SharedContext) => void>());
+  const [contextVersion, setContextVersion] = useState(0);
 
   const getSharedContext = useCallback(() => sharedContextRef.current, []);
   const setSharedContext = useCallback((patch: SharedContext) => {
@@ -106,6 +118,7 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     for (const listener of contextSubscribers.current) {
       listener(sharedContextRef.current);
     }
+    setContextVersion((version) => version + 1);
   }, []);
   const subscribeSharedContext = useCallback(
     (listener: (context: SharedContext) => void) => {
@@ -186,6 +199,16 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [applyShortcut]);
+
+  // Reflect the workspace (primary app, docked detail, shared selection) into the
+  // URL so it's shareable / bookmarkable / reloadable.
+  useEffect(() => {
+    writeWorkspaceToUrl(apps, {
+      appId: activeAppId,
+      detailId: detailAppId,
+      context: sharedContextRef.current,
+    });
+  }, [apps, activeAppId, detailAppId, contextVersion]);
 
   const value = useMemo<ChromeContextValue>(
     () => ({
