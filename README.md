@@ -28,15 +28,32 @@ which is what makes command `run` callbacks and remote-dom event listeners
 packages/
   protocol/         Shared contract: HostThread API + the remote-dom "component kit"
                     (tag names, properties, events) both sides agree on.
-  host/    :5173    The chrome. Nav, command palette (⌘K), toast region, modal layer,
-                    sandboxed iframe container, and the host-side implementations of
-                    the component kit (RemoteRootRenderer + component map).
+  host/    :5173    The chrome. App rail (switcher), nav, command palette (⌘K),
+                    toast region, modal layer, the active app's iframe container, and
+                    the host-side component kit (RemoteRootRenderer + component map).
   plugin-example/   :5174  An untrusted plugin. Its own in-iframe UI, plus a contributed
                     remote-dom tree (toolbar + modal) and two ⌘K commands.
 ```
 
 The host and plugin run on **different origins** (`:5173` vs `:5174`) so the
 iframe boundary is a real security boundary, not just a visual frame.
+
+### Multiple apps
+
+The chrome hosts a registry of apps (`host/src/apps.ts`) and switches between them
+via the left app rail. Two kinds:
+
+- **`plugin`** — integrated, loaded via `PluginHost` (thread + remote-dom).
+- **`external`** — a plain sandboxed iframe with no host integration (e.g. Google).
+
+Only the active app is mounted. Switching away from a plugin unmounts it, which
+runs its cleanup: the thread closes and its contributed commands/toolbar are
+removed from the chrome. Switching back re-mounts and re-handshakes (so the plugin
+reloads — state is not preserved across switches, which is fine for this prototype).
+
+> The Google entry uses `https://www.google.com/webhp?igu=1`. Plain
+> `https://google.com` refuses to be framed (`X-Frame-Options` / CSP
+> `frame-ancestors`); `igu=1` is Google's frameable embed endpoint.
 
 ## Run it
 
@@ -64,6 +81,8 @@ exercising the cross-origin channels rather than mocking them:
 - `tests/capability-api.spec.ts` — toast from inside the iframe; command-palette
   registration; command `run` callbacks proxied back to the plugin; query
   filtering; the ⌘K shortcut.
+- `tests/app-switching.spec.ts` — the app rail lists every app; switching to the
+  external app tears down the plugin's contributions; switching back restores them.
 
 The Playwright config (`playwright.config.ts`) auto-starts both dev servers via
 `webServer`, so `npm test` is self-contained. It drives the locally installed
@@ -99,8 +118,9 @@ npm run test:ui     # interactive Playwright UI
   iframe *its own* origin (`:5174`), not the host's; since that differs from the
   host origin, the two remain isolated by the browser while still allowing targeted
   `postMessage`.
-- This is a prototype: no plugin registry, no per-plugin CSP, no auth, single plugin
-  instance. See "Next steps" below.
+- This is a prototype: the app registry is hardcoded, there's no per-plugin CSP or
+  auth, only one app is mounted at a time, and switching reloads it. See "Next
+  steps" below.
 
 ## Next steps (not implemented)
 

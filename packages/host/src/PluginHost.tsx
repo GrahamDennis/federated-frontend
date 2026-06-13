@@ -48,14 +48,8 @@ export function PluginHost({pluginId, src}: PluginHostProps) {
   }, [pluginId, src, receiver]);
 
   return (
-    <section className="plugin">
-      <div className="plugin-titlebar">
-        <span className="plugin-dot" />
-        <span className="plugin-name">{pluginId}</span>
-        <span className="plugin-origin">{new URL(src).origin}</span>
-        <span className="plugin-badge">sandboxed iframe</span>
-      </div>
-      <div className="plugin-frame">
+    <>
+      <div className="app-frame">
         <iframe
           ref={iframeRef}
           src={src}
@@ -69,6 +63,6 @@ export function PluginHost({pluginId, src}: PluginHostProps) {
         renders inline here — it's purely the bridge for the contributed UI.
       */}
       <RemoteRootRenderer receiver={receiver} components={components} />
-    </section>
+    </>
   );
 }

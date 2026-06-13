@@ -6,9 +6,10 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from 'react';
 import type {CommandDescriptor, ToastOptions, ToastTone} from '@ff/protocol';
+import type {AppDescriptor} from './apps';
+import {AppView} from './AppView';
 
 /**
  * The host chrome's shared services. Plugin hosts get at these (via {@link useChrome})
@@ -41,7 +42,10 @@ interface Toast {
 
 let nextToastId = 1;
 
-export function Chrome({children}: {children: ReactNode}) {
+export function Chrome({apps}: {apps: AppDescriptor[]}) {
+  const [activeAppId, setActiveAppId] = useState(apps[0]?.id);
+  const activeApp = apps.find((app) => app.id === activeAppId) ?? apps[0];
+
   const [toasts, setToasts] = useState<Toast[]>([]);
   // Commands are keyed by the contributing plugin so a plugin reloading or
   // unmounting can cleanly replace/remove just its own entries.
@@ -111,7 +115,39 @@ export function Chrome({children}: {children: ReactNode}) {
           </button>
         </header>
 
-        <main className="content">{children}</main>
+        <div className="body">
+          <nav className="app-rail">
+            <div className="app-rail-heading">Apps</div>
+            {apps.map((app) => (
+              <button
+                key={app.id}
+                className={`app-rail-item${app.id === activeAppId ? ' active' : ''}`}
+                onClick={() => setActiveAppId(app.id)}
+              >
+                <span className="app-rail-name">{app.name}</span>
+                <span className="app-rail-kind">
+                  {app.kind === 'plugin' ? 'integrated' : 'external'}
+                </span>
+              </button>
+            ))}
+          </nav>
+
+          <main className="content">
+            {activeApp && (
+              <div className="workspace">
+                {activeApp.description && (
+                  <p className="workspace-hint">{activeApp.description}</p>
+                )}
+                {/*
+                  Keyed by app id so switching fully unmounts the previous app.
+                  For a plugin that runs its cleanup: the thread closes and its
+                  contributed commands/toolbar are removed from the chrome.
+                */}
+                <AppView key={activeApp.id} app={activeApp} />
+              </div>
+            )}
+          </main>
+        </div>
 
         <ToastRegion toasts={toasts} />
         {paletteOpen && (
