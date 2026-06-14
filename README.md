@@ -26,8 +26,12 @@ which is what makes command `run` callbacks and remote-dom event listeners
 
 ```
 packages/
-  protocol/         Shared contract: HostThread API + the remote-dom "component kit"
-                    (tag names, properties, events) both sides agree on.
+  protocol/         Framework- AND transport-agnostic wire contract: HostThread API,
+                    the remote-dom element definitions both sides agree on, origins,
+                    and transport-agnostic helpers. No React, no @quilted/threads import.
+  plugin-sdk-react/ React plugin SDK layered on protocol: connectToHost (the threads
+                    handshake), the Platform abstraction + ComponentKit, the hosted/
+                    standalone kits, and StandaloneChrome.
   host/    :5173    The chrome. App rail (switcher), nav, command palette (⌘K),
                     toast region, modal layer, the active app's iframe container, and
                     the host-side component kit (RemoteRootRenderer + component map).
@@ -213,6 +217,17 @@ npm run test:ui     # interactive Playwright UI
   the React bindings are just for JSX ergonomics. `@remote-dom/react` pulls in
   `@types/react@18`, so the root `package.json` has an `overrides` block pinning a
   single `@types/react@19` to avoid duplicate-React-types errors.
+- **Package layering / what goes where.** `@ff/protocol` imports *neither* a UI
+  framework *nor* a concrete transport — it's the pure wire contract (types, remote
+  element definitions, origins, and transport-agnostic helpers like
+  `forwardKeyboardShortcuts`, written against an abstract host). Anything that
+  imports React *or* `@quilted/threads` lives one layer up in `@ff/plugin-sdk-react`
+  — including `connectToHost` (it imports `ThreadWindow`, so it's transport-specific
+  even though it's React-free). Plugins that render their own UI (map, Places)
+  import just `@ff/plugin-sdk-react/connect`; the example plugin uses the full SDK.
+  Internal workspace packages are consumed as TS source (no build step); Vite
+  transforms their TSX, and `@ff/plugin-sdk-react` declares no React dependency so
+  it resolves each consumer's hoisted React.
 - **`StrictMode` is intentionally omitted** in the host — its dev-only double
   invocation of effects would tear down and recreate the iframe/thread mid-handshake.
 - **Contributions are declarative.** A plugin streams its remote-dom tree to the

@@ -1,5 +1,5 @@
 import {useEffect} from 'react';
-import {usePlatform} from './platform';
+import {usePlatform} from '@ff/plugin-sdk-react';
 import {useStore, setState} from './store';
 
 /**

@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react';
 import type {AppSummary} from '@ff/protocol';
-import {usePlatform} from './platform';
+import {usePlatform} from '@ff/plugin-sdk-react';
 import {useStore, setState} from './store';
 
 /**

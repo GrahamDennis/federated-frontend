@@ -1,0 +1,26 @@
+{
+  "name": "@ff/plugin-sdk-react",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./connect": "./src/connect.ts"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "comment": "react/react-dom are not declared: this internal package is consumed as source by React plugins and resolves their hoisted React. @types/* are devDeps for this package's own typecheck.",
+  "dependencies": {
+    "@ff/protocol": "*",
+    "@quilted/threads": "^4.0.3",
+    "@remote-dom/core": "^1.11.1",
+    "@remote-dom/react": "^1.2.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
+  }
+}

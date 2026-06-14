@@ -10,9 +10,7 @@
   },
   "dependencies": {
     "@ff/protocol": "*",
-    "@quilted/threads": "^4.0.3",
-    "@remote-dom/core": "^1.11.1",
-    "@remote-dom/react": "^1.2.2",
+    "@ff/plugin-sdk-react": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

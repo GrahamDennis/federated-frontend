@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react';
-import type {ThreadImports} from '@quilted/threads';
-import type {HostThread, SelectedPlace} from '@ff/protocol';
+import type {Host} from '@ff/plugin-sdk-react/connect';
+import type {SelectedPlace} from '@ff/protocol';
 
 /**
  * A subordinate "detail" companion. It doesn't own a primary view — it reflects
@@ -8,7 +8,7 @@ import type {HostThread, SelectedPlace} from '@ff/protocol';
  * (published by the map). This is the spoke in the hub-and-spokes pattern: the
  * value comes from being composed *beside* the map and bound to the same data.
  */
-export function PlacesApp({host}: {host?: ThreadImports<HostThread>}) {
+export function PlacesApp({host}: {host?: Host}) {
   const [selected, setSelected] = useState<SelectedPlace | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
 

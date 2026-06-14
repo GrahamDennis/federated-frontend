@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import maplibregl from 'maplibre-gl';
-import type {ThreadImports} from '@quilted/threads';
-import type {HostThread, SelectedPlace} from '@ff/protocol';
+import type {Host} from '@ff/plugin-sdk-react/connect';
+import type {SelectedPlace} from '@ff/protocol';
 
 interface Place {
   id: string;
@@ -27,7 +27,7 @@ const PLACES: Place[] = [
 export function MapApp({
   host,
 }: {
-  host?: ThreadImports<HostThread>;
+  host?: Host;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
