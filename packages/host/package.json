@@ -8,19 +8,16 @@
     "build": "vite build",
     "preview": "vite preview"
   },
+  "comment": "The host runs on Preact (no React, no react->preact/compat alias). Plugins are React 19; they interoperate via the framework-agnostic remote-dom connection.",
   "dependencies": {
     "@ff/protocol": "*",
+    "@preact/signals": "^1.3.2",
     "@preact/signals-core": "^1.8.0",
     "@quilted/threads": "^4.0.3",
-    "@remote-dom/core": "^1.11.1",
-    "@remote-dom/react": "^1.2.2",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@remote-dom/preact": "^1.3.0",
+    "preact": "^10.29.2"
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^4.3.4",
     "vite": "^7.3.0"
   }
 }

@@ -46,6 +46,28 @@ packages/
 The host and plugin run on **different origins** (`:5173` vs `:5174`) so the
 iframe boundary is a real security boundary, not just a visual frame.
 
+### Different frameworks per app: the host is Preact, the plugins are React 19
+
+To prove the apps needn't share a framework (or a framework *version*), the **host
+runs on Preact** while the **plugins author their trees in React 19**. They
+interoperate purely through the framework-agnostic remote-dom connection: the
+plugin (React) streams DOM mutations across the iframe boundary, and the host
+(Preact) renders them with its own Preact components via `@remote-dom/preact`'s
+`SignalRemoteReceiver` + `RemoteRootRenderer`. The host has **no React dependency
+and no `react → preact/compat` alias** (the "shim"); JSX uses Preact's automatic
+runtime (`jsxImportSource: 'preact'`, no `@vitejs/plugin-react`).
+
+A few Preact-specific things this surfaced:
+
+- **Portals** live in `preact/compat`; to stay shim-free the host hand-rolls a
+  tiny portal (`remoteComponents.tsx`) that renders into the chrome's leaf slots.
+- **`onChange` is the native change event** in Preact (fires on blur), so the
+  command palette input uses **`onInput`** to filter as you type.
+- **`@remote-dom/preact`'s renderer is signals-based**: the host must `import
+  '@preact/signals'` (side effect) to activate the Preact integration so renders
+  track the receiver's signals, and Vite `resolve.dedupe`s preact + signals so
+  there's a single instance.
+
 ### Hosted vs standalone (progressive enhancement)
 
 The example plugin also runs **standalone** — open http://localhost:5174 directly.

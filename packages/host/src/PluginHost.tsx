@@ -1,7 +1,9 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useRef, useState} from 'preact/hooks';
 import {ThreadWindow} from '@quilted/threads';
-import {RemoteReceiver} from '@remote-dom/core/receivers';
-import {RemoteRootRenderer} from '@remote-dom/react/host';
+import {
+  RemoteRootRenderer,
+  SignalRemoteReceiver,
+} from '@remote-dom/preact/host';
 import type {HostThread} from '@ff/protocol';
 import {useChrome} from './chrome';
 import {components} from './remoteComponents';
@@ -21,7 +23,9 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
   const chrome = useChrome();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // One receiver per plugin: it stores the remote tree this plugin contributes.
-  const [receiver] = useState(() => new RemoteReceiver());
+  // The plugin (React) streams mutations into this Preact/signals receiver over
+  // the framework-agnostic remote-dom connection.
+  const [receiver] = useState(() => new SignalRemoteReceiver());
 
   // Keep the latest chrome callbacks without re-running the thread setup effect.
   const chromeRef = useRef(chrome);

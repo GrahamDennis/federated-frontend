@@ -1,16 +1,41 @@
-import {createPortal} from 'react-dom';
-import type {ComponentType, ReactNode} from 'react';
-import {createRemoteComponentRenderer} from '@remote-dom/react/host';
+import {render, type ComponentChildren, type ComponentType} from 'preact';
+import {useEffect} from 'preact/hooks';
+import {createRemoteComponentRenderer} from '@remote-dom/preact/host';
 import {ELEMENT_TAGS} from '@ff/protocol/elements';
 import {useChrome} from './chrome';
 
 /**
- * Host-controlled implementations of the shared component kit. The plugin only
- * ever describes *which* of these to render and with what props/children — the
- * host decides what they look like and, crucially, *where they render*. Toolbar
- * sections and modals use React portals to escape the plugin's iframe and draw
- * into the host chrome.
+ * Host-controlled implementations of the shared component kit — in **Preact**,
+ * while the plugins author their trees in **React 19**. The plugin only ever
+ * describes *which* of these to render and with what props/children; the host
+ * (a different framework, different version) decides what they look like and
+ * where they render. The remote-dom connection is the framework-agnostic bridge.
+ *
+ * Toolbar sections and modals portal into the chrome to escape the plugin pane.
  */
+
+/**
+ * A minimal Preact portal — no `preact/compat`. Renders `children` into `into`
+ * via a nested Preact render. Safe here because the targets (`toolbarSlot` /
+ * `modalLayer`) are leaf nodes the main tree never renders children into, so the
+ * two renders never fight over the container.
+ */
+function Portal({
+  into,
+  children,
+}: {
+  into: HTMLElement;
+  children: ComponentChildren;
+}) {
+  // Keep the portal contents in sync on every render (Preact diffs against the
+  // previous nested render into the same container — no remount).
+  useEffect(() => {
+    render(<>{children}</>, into);
+  });
+  // Tear the nested tree down when the portal unmounts.
+  useEffect(() => () => render(null, into), [into]);
+  return null;
+}
 
 function HostStack({
   direction = 'vertical',
@@ -19,7 +44,7 @@ function HostStack({
 }: {
   direction?: 'vertical' | 'horizontal';
   gap?: number;
-  children?: ReactNode;
+  children?: ComponentChildren;
 }) {
   return (
     <div
@@ -40,7 +65,7 @@ function HostText({
   children,
 }: {
   tone?: 'default' | 'subdued';
-  children?: ReactNode;
+  children?: ComponentChildren;
 }) {
   return (
     <span style={{color: tone === 'subdued' ? 'var(--subdued)' : 'inherit'}}>
@@ -58,7 +83,7 @@ function HostButton({
   tone?: 'default' | 'primary' | 'critical';
   disabled?: boolean;
   onPress?: () => void;
-  children?: ReactNode;
+  children?: ComponentChildren;
 }) {
   return (
     <button
@@ -76,16 +101,17 @@ function HostToolbarSection({
   children,
 }: {
   label?: string;
-  children?: ReactNode;
+  children?: ComponentChildren;
 }) {
   const {toolbarSlot} = useChrome();
   if (!toolbarSlot) return null;
-  return createPortal(
-    <div className="toolbar-section">
-      {label && <span className="toolbar-section-label">{label}</span>}
-      {children}
-    </div>,
-    toolbarSlot,
+  return (
+    <Portal into={toolbarSlot}>
+      <div className="toolbar-section">
+        {label && <span className="toolbar-section-label">{label}</span>}
+        {children}
+      </div>
+    </Portal>
   );
 }
 
@@ -98,29 +124,30 @@ function HostModal({
   open?: boolean;
   heading?: string;
   onClose?: () => void;
-  children?: ReactNode;
+  children?: ComponentChildren;
 }) {
   const {modalLayer} = useChrome();
   if (!open || !modalLayer) return null;
-  return createPortal(
-    <div className="modal-backdrop" onClick={() => onClose?.()}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <header className="modal-header">
-          <h2>{heading}</h2>
-          <button className="modal-close" onClick={() => onClose?.()}>
-            ×
-          </button>
-        </header>
-        <div className="modal-body">{children}</div>
+  return (
+    <Portal into={modalLayer}>
+      <div className="modal-backdrop" onClick={() => onClose?.()}>
+        <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <header className="modal-header">
+            <h2>{heading}</h2>
+            <button className="modal-close" onClick={() => onClose?.()}>
+              ×
+            </button>
+          </header>
+          <div className="modal-body">{children}</div>
+        </div>
       </div>
-    </div>,
-    modalLayer,
+    </Portal>
   );
 }
 
 /**
- * The map handed to `<RemoteRootRenderer>`. `eventProps` wires a React `on*`
- * prop on the host component to a named event dispatched back to the plugin.
+ * The map handed to `<RemoteRootRenderer>`. `eventProps` wires an `on*` prop on
+ * the host (Preact) component to a named event dispatched back to the plugin.
  */
 export const components = new Map<string, ComponentType<any>>([
   [ELEMENT_TAGS.stack, createRemoteComponentRenderer(HostStack)],

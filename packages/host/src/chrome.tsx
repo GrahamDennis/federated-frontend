@@ -1,12 +1,12 @@
+import {createContext} from 'preact';
 import {
-  createContext,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
-} from 'react';
+} from 'preact/hooks';
 import type {
   CommandDescriptor,
   ForwardedKeyEvent,
@@ -407,8 +407,10 @@ function CommandPalette({
           className="palette-input"
           placeholder="Type a command contributed by a plugin…"
           value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
+          onInput={(e) => {
+            // Preact: onInput fires per keystroke (onChange is the native change
+            // event — blur only).
+            setQuery(e.currentTarget.value);
             setActive(0);
           }}
         />
