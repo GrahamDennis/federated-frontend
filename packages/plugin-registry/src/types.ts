@@ -57,6 +57,15 @@ export interface RegistryConfig {
   contentBaseUrl?: string;
   /** Registries served over plain HTTP (no TLS). Defaults cover localhost. */
   insecureRegistries?: string[];
+  /** Content-cache eviction tuning (configured plugins are always exempt). */
+  cache?: {
+    /** LRU size cap in MB for evictable bundles. */
+    maxMB?: number;
+    /** Evict an evictable bundle this many minutes after its last use. */
+    ttlMinutes?: number;
+    /** Eviction sweep interval in seconds. */
+    sweepSeconds?: number;
+  };
   plugins: Record<string, PluginEntry>;
 }
 

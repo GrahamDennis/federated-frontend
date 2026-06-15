@@ -61,8 +61,31 @@ Port 5000 is avoided deliberately — macOS AirPlay Receiver squats on it.
 ## Config
 
 `registry.config.yaml`: a `plugins` map keyed by opaque handles. Each value has a
-`source` (`oci` ref by tag or `@sha256` digest, or a `cdn` url) and optional
-`metadata` overrides shallow-merged over the manifest reported by the source.
+`source` (`oci` ref by tag or `@sha256` digest, an `http` url, or `external`) and
+optional `metadata` overrides shallow-merged over the manifest reported by the
+source.
+
+An optional `cache` block tunes content-cache eviction:
+
+```yaml
+cache:
+  maxMB: 512        # LRU size cap for evictable bundles (default 512)
+  ttlMinutes: 60    # evict an evictable bundle this long after its last use (default 60)
+  sweepSeconds: 60  # eviction sweep interval (default 60)
+```
+
+## Content cache + eviction
+
+Extracted bundles live in `$FF_CONTENT_CACHE` (default `<os tmpdir>/ff-plugin-content`),
+one directory per manifest digest. Because the key is a digest, content is
+immutable and reused as long as it's present (and across restarts — the cache
+re-registers existing bundles on startup).
+
+Eviction keeps it bounded: the digests of **currently-configured plugins are
+pinned and never evicted** (refreshed from the resolver, so they track moving
+tags). Everything else — old versions of a configured plugin, or plugins removed
+from config — is evicted either `ttlMinutes` after its last use, or, when the
+cache exceeds `maxMB`, least-recently-used first.
 
 ## Layout
 
@@ -71,8 +94,8 @@ src/
   types.ts       PluginManifest, sources, config, ResolvedPlugin
   config.ts      load + validate YAML
   oci/client.ts  pull-only OCI distribution client (manifests + blobs)
-  resolver.ts    sources -> digests/manifests; digest -> repo index; TTL cache
-  cache.ts       content-addressed on-disk cache of unpacked bundles
+  resolver.ts    sources -> digests/manifests; repo -> registry allowlist; TTL cache
+  cache.ts       content-addressed on-disk cache of unpacked bundles + eviction
   content.ts     GET /content/<repo>@<digest>/<path>
   discovery.ts   GET /v1/plugins
   server.ts      wiring (Hono + @hono/node-server)

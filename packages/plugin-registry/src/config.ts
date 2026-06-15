@@ -33,6 +33,7 @@ export async function loadConfig(path: string): Promise<RegistryConfig> {
   return {
     contentBaseUrl: raw.contentBaseUrl,
     insecureRegistries: [...DEFAULT_INSECURE, ...(raw.insecureRegistries ?? [])],
+    cache: raw.cache,
     plugins: raw.plugins,
   };
 }

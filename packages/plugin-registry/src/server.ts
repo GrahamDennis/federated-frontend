@@ -14,7 +14,17 @@ const PORT = Number(process.env.PORT ?? 5180);
 
 const config = await loadConfig(CONFIG_PATH);
 const resolver = new Resolver(config);
-const cache = new ContentCache(resolver.client);
+const cache = new ContentCache(resolver.client, {
+  maxBytes: (config.cache?.maxMB ?? 512) * 1024 * 1024,
+  ttlMs: (config.cache?.ttlMinutes ?? 60) * 60_000,
+  sweepIntervalMs: (config.cache?.sweepSeconds ?? 60) * 1000,
+  // Pin the currently-configured plugins' resolved digests so they're never evicted.
+  pinned: async () => {
+    const sources = await resolver.resolveAll();
+    return new Set(sources.flatMap((s) => (s.kind === 'oci' ? [s.digest] : [])));
+  },
+});
+await cache.start();
 
 const app = new Hono();
 app.get('/', (c) => c.json({service: '@ff/plugin-registry', endpoints: ['/v1/plugins', '/content/<repo>@<digest>/*']}));

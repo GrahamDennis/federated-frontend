@@ -171,6 +171,40 @@ catalog.
 > `https://google.com` refuses to be framed (`X-Frame-Options` / CSP
 > `frame-ancestors`); `igu=1` is Google's frameable embed endpoint.
 
+## Plugin distribution & discovery
+
+The chrome hardcodes **no individual plugin**. It discovers what to host at boot
+from a small companion service, **`@ff/plugin-registry`** (`:5180`), and the host's
+only configuration is where that registry lives (`VITE_PLUGIN_REGISTRY_URL`). The
+service has two responsibilities behind one shared resolver
+(`packages/plugin-registry/`):
+
+- **Discovery** — `GET /v1/plugins?<filters>` returns each configured plugin's
+  manifest plus an **immutable** content URL. The host fetches this and builds its
+  app rail (`host/src/apps.ts`); it can filter by `kind` etc. rather than naming
+  plugins.
+- **Content** — `GET /content/<repo>@<digest>/<path>` serves a plugin's unpacked
+  static bundle. It's content-addressed (immutable, long-cached) and the URL is
+  the artifact's own OCI coordinate, so it's self-documenting (which plugin) and
+  self-locating (where to pull) — e.g.
+  `…/content/ff-plugins/world-map@sha256:76bb…/index.html`.
+
+A plugin is distributed as an **ORAS-style OCI artifact**: the unpacked `dist/`
+bundle plus a manifest (`ff-plugin.json`, authored in each plugin's `public/`,
+lifted into the artifact's config blob). The registry is configured with **plugin
+sources** — `oci` (an artifact, referenced by a moving tag that's resolved to an
+immutable digest at query time so the tag never reaches the host, or pinned by
+`@sha256`), `http` (an already-unpacked bundle at a URL — a CDN, object store, or
+a Vite dev server), or `external` (an arbitrary embedded site, e.g. Google). This
+is what lets the **same host** run against either dev servers or deployed
+artifacts: in dev the registry points at the plugin dev servers, so `npm run dev`
+works end-to-end without an OCI registry; the deployed path serves the exact same
+plugins from content-addressed artifacts (see `packages/plugin-registry/README.md`).
+
+Extracted bundles are cached on disk and bounded by eviction: the currently
+configured plugins are pinned, everything else (old versions, removed plugins)
+ages out by TTL / LRU size cap.
+
 ## Run it
 
 ```bash
