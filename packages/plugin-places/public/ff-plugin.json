@@ -1,0 +1,9 @@
+{
+  "id": "places",
+  "name": "Places",
+  "version": "0.0.0",
+  "kind": "plugin",
+  "entry": "index.html",
+  "detail": true,
+  "description": "A detail companion: it reflects and annotates the place currently selected in the shared workspace context."
+}

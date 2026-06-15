@@ -7,13 +7,14 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n host,notes,map,places -c cyan,magenta,green,yellow \"npm:dev:host\" \"npm:dev:plugin\" \"npm:dev:map\" \"npm:dev:places\"",
+    "dev": "concurrently -n host,registry,notes,map,places -c cyan,blue,magenta,green,yellow \"npm:dev:host\" \"npm:dev:registry\" \"npm:dev:plugin\" \"npm:dev:map\" \"npm:dev:places\"",
     "dev:host": "npm run dev -w @ff/host",
+    "dev:registry": "npm run dev -w @ff/plugin-registry",
     "dev:plugin": "npm run dev -w @ff/plugin-example",
     "dev:map": "npm run dev -w @ff/plugin-map",
     "dev:places": "npm run dev -w @ff/plugin-places",
     "build": "npm run build -w @ff/protocol && npm run build -w @ff/host && npm run build -w @ff/plugin-example && npm run build -w @ff/plugin-map && npm run build -w @ff/plugin-places",
-    "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p packages/plugin-sdk-react/tsconfig.json && tsc --noEmit -p packages/host/tsconfig.json && tsc --noEmit -p packages/plugin-example/tsconfig.json && tsc --noEmit -p packages/plugin-map/tsconfig.json && tsc --noEmit -p packages/plugin-places/tsconfig.json",
+    "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p packages/plugin-sdk-react/tsconfig.json && tsc --noEmit -p packages/host/tsconfig.json && tsc --noEmit -p packages/plugin-example/tsconfig.json && tsc --noEmit -p packages/plugin-map/tsconfig.json && tsc --noEmit -p packages/plugin-places/tsconfig.json && tsc --noEmit -p packages/plugin-registry/tsconfig.json",
     "test": "playwright test",
     "test:ui": "playwright test --ui"
   },

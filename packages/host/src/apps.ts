@@ -1,18 +1,19 @@
-import {
-  MAP_PLUGIN_ORIGIN,
-  PLACES_PLUGIN_ORIGIN,
-  PLUGIN_ORIGIN,
-} from '@ff/protocol';
+/// <reference types="vite/client" />
 
 /**
  * An app the chrome can host. `plugin` apps integrate with the chrome over the
  * capability + remote-dom channels; `external` apps are just sandboxed iframes
  * with no integration at all.
+ *
+ * The chrome no longer hardcodes any individual app: this descriptor is built
+ * from the plugin-registry discovery API at boot (see {@link fetchApps}). The
+ * host's only configuration is where the registry lives.
  */
 export interface AppDescriptor {
   id: string;
   name: string;
   kind: 'plugin' | 'external';
+  /** Full URL of the app's entry document (its origin is the iframe origin). */
   src: string;
   description?: string;
   /** Companion apps that can be docked as a subordinate detail panel. */
@@ -21,44 +22,36 @@ export interface AppDescriptor {
   detail?: boolean;
 }
 
-export const APPS: AppDescriptor[] = [
-  {
-    id: 'example-notes',
-    name: 'Example Notes',
-    kind: 'plugin',
-    src: PLUGIN_ORIGIN,
-    description:
-      'An integrated plugin: it contributes a toolbar section, ⌘K commands, toasts, and a whole-window modal to this chrome.',
-  },
-  {
-    id: 'world-map',
-    name: 'World Map',
-    kind: 'plugin',
-    src: MAP_PLUGIN_ORIGIN,
-    description:
-      'A MapLibre GL map (an integrated plugin). It uses only the capability API: it registers ⌘K fly-to commands and raises toasts, with no remote-dom contributions.',
-    // Can dock the Places panel as a subordinate detail view that reflects the
-    // map's current selection via the shared workspace context.
-    detailApps: ['places'],
-  },
-  {
-    id: 'places',
-    name: 'Places',
-    kind: 'plugin',
-    src: PLACES_PLUGIN_ORIGIN,
-    detail: true,
-    description:
-      'A detail companion: it reflects and annotates the place currently selected in the shared workspace context.',
-  },
-  {
-    id: 'google',
-    name: 'Google',
-    kind: 'external',
-    // Plain https://google.com refuses to be framed (X-Frame-Options / CSP
-    // frame-ancestors). `?igu=1` is Google's frameable embed endpoint, used here
-    // purely to demonstrate a non-integrated external app in the same chrome.
-    src: 'https://www.google.com/webhp?igu=1',
-    description:
-      'A plain external website with no host integration — it cannot contribute toolbars, commands, toasts, or modals.',
-  },
-];
+/** The discovery API's view of a plugin (the fields the chrome consumes). */
+interface DiscoveredPlugin {
+  id: string;
+  name: string;
+  kind: 'plugin' | 'external';
+  entryUrl: string;
+  description?: string;
+  detailApps?: string[];
+  detail?: boolean;
+}
+
+const REGISTRY_URL =
+  import.meta.env.VITE_PLUGIN_REGISTRY_URL ?? 'http://localhost:5180';
+
+/**
+ * Fetch the available apps from the plugin-registry discovery API. The host
+ * names no specific plugin — the registry is the single source of truth; the
+ * host could pass `?kind=` (or other) filters here for the plugins it can host.
+ */
+export async function fetchApps(): Promise<AppDescriptor[]> {
+  const res = await fetch(`${REGISTRY_URL}/v1/plugins`);
+  if (!res.ok) throw new Error(`discovery ${REGISTRY_URL}/v1/plugins -> ${res.status}`);
+  const {plugins} = (await res.json()) as {plugins: DiscoveredPlugin[]};
+  return plugins.map((p) => ({
+    id: p.id,
+    name: p.name,
+    kind: p.kind,
+    src: p.entryUrl,
+    description: p.description,
+    detailApps: p.detailApps,
+    detail: p.detail,
+  }));
+}

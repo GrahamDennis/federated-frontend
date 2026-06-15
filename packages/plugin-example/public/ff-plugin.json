@@ -1,0 +1,8 @@
+{
+  "id": "example-notes",
+  "name": "Example Notes",
+  "version": "0.0.0",
+  "kind": "plugin",
+  "entry": "index.html",
+  "description": "An integrated plugin: it contributes a toolbar section, ⌘K commands, toasts, and a whole-window modal to this chrome."
+}

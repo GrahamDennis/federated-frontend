@@ -1,0 +1,31 @@
+# The "deployed" config: plugins are served from the local OCI registry (zot) as
+# content-addressed artifacts, instead of from Vite dev servers.
+#
+# Prereqs:
+#   1. zot running:   packages/plugin-registry/scripts/zot.sh
+#   2. plugins pushed: npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/<plugin> --tag dev
+#
+# Run the registry against this config:
+#   FF_REGISTRY_CONFIG=packages/plugin-registry/registry.config.oci.yaml npm run dev -w @ff/plugin-registry
+#
+# The `dev` tag is resolved to an immutable digest at query time, so /v1/plugins
+# returns content-addressed /content/<digest>/ URLs (the tag never reaches the host).
+
+insecureRegistries:
+  - localhost:5001
+
+plugins:
+  notes:
+    source: {type: oci, ref: localhost:5001/ff-plugins/example-notes:dev}
+  world-map:
+    source: {type: oci, ref: localhost:5001/ff-plugins/world-map:dev}
+  places:
+    source: {type: oci, ref: localhost:5001/ff-plugins/places:dev}
+
+  google:
+    source: {type: external, url: 'https://www.google.com/webhp?igu=1'}
+    metadata:
+      id: google
+      name: Google
+      kind: external
+      description: A plain external website with no host integration — it cannot contribute toolbars, commands, toasts, or modals.

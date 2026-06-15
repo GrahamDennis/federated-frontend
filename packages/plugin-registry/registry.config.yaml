@@ -1,0 +1,45 @@
+# Plugin sources for the registry/content service.
+#
+# `plugins` is a map whose KEYS are opaque handles (they don't have to match the
+# plugin id). Each value declares a `source` and optional `metadata` overrides.
+# Metadata otherwise comes from the source itself (the OCI config blob, or
+# `<url>/ff-plugin.json` for http/CDN/dev-server sources).
+#
+# Source types:
+#   oci       — an OCI artifact; tag is resolved to a digest at query time (so
+#               the moving tag never reaches the host), or pin an immutable
+#               @sha256 digest directly.
+#   http      — an already-unpacked bundle at a URL: a CDN, an object store, or a
+#               Vite dev server. The URL is returned to the host unchanged.
+#   external  — an arbitrary website embedded as a non-integrated iframe; needs
+#               metadata.id (there is no ff-plugin.json to read).
+#
+# This default config points the three plugins at their Vite dev servers, so
+# `npm run dev` works end-to-end through the registry without pushing to OCI.
+# Swap a source to `oci` (see the commented block) to serve the deployed path.
+
+insecureRegistries:
+  - localhost:5001
+
+plugins:
+  notes:
+    source: {type: http, url: http://localhost:5174/}
+  world-map:
+    source: {type: http, url: http://localhost:5175/}
+  places:
+    source: {type: http, url: http://localhost:5176/}
+
+  google:
+    source: {type: external, url: 'https://www.google.com/webhp?igu=1'}
+    metadata:
+      id: google
+      name: Google
+      kind: external
+      description: A plain external website with no host integration — it cannot contribute toolbars, commands, toasts, or modals.
+
+  # The deployed path: serve a plugin from an OCI artifact instead of a dev
+  # server. Push first: `npm run package-plugin -w @ff/plugin-registry --
+  # packages/plugin-map`. Then replace the `world-map` source above with:
+  #
+  #   world-map:
+  #     source: {type: oci, ref: localhost:5001/ff-plugins/world-map:dev}

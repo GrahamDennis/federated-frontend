@@ -41,6 +41,11 @@ packages/
                     (⌘K fly-to commands + toasts) — no remote-dom contributions.
   plugin-places/    :5176  A subordinate "detail" companion that reflects/annotates
                     the place selected in the shared workspace context.
+  plugin-registry/  :5180  Plugin distribution + discovery. Packages plugins as
+                    ORAS-style OCI artifacts and serves them: a dumb
+                    content-addressed endpoint (/content/<digest>/) plus a
+                    discovery API (/v1/plugins). The host discovers all its apps
+                    here — it hardcodes no individual plugin. See its README.
 ```
 
 The host and plugin run on **different origins** (`:5173` vs `:5174`) so the
@@ -170,11 +175,17 @@ catalog.
 
 ```bash
 npm install
-npm run dev       # starts host (:5173) and plugin (:5174) together
+npm run dev       # host (:5173), plugin registry (:5180), and the 3 plugins (:5174–:5176)
 # open http://localhost:5173
 npm run typecheck
-npm test          # Playwright e2e (boots both servers automatically)
+npm test          # Playwright e2e (boots all the dev servers automatically)
 ```
+
+The host discovers its apps from the plugin registry (`:5180`), which in dev is
+backed by the plugin dev servers — so no OCI registry is needed for the dev loop.
+To exercise the **deployed** path (plugins served from an OCI registry as
+content-addressed artifacts), see `packages/plugin-registry/README.md`: run a
+local zot, `oras push` the plugins, and point a source at `type: oci`.
 
 Try: the **Open details / Quick save** buttons in the top nav (contributed by the
 plugin via remote-dom), **⌘K** for the plugin's commands, and the buttons inside
@@ -274,14 +285,15 @@ npm run test:ui     # interactive Playwright UI
   iframe *its own* origin (`:5174`), not the host's; since that differs from the
   host origin, the two remain isolated by the browser while still allowing targeted
   `postMessage`.
-- This is a prototype: the app registry is hardcoded, there's no per-plugin CSP or
-  auth, and every activated app is kept alive indefinitely (no eviction yet). See
-  "Next steps" below.
+- This is a prototype: there's no per-plugin CSP or auth, and every activated app
+  is kept alive indefinitely (no eviction yet). See "Next steps" below.
 
 ## Next steps (not implemented)
 
-- A real plugin registry / manifest and dynamic loading.
-- Per-plugin Content-Security-Policy and permission scoping of the capability API.
+- Per-plugin origin isolation for OCI-served plugins (today they share the content
+  server's origin; a production setup would serve each digest from its own
+  subdomain). Per-plugin Content-Security-Policy and permission scoping of the
+  capability API.
 - More contributed surfaces (sidebars, settings panels, context menus).
 - A keep-alive eviction policy: cap the number of backgrounded apps and evict the
   least-recently-used / longest-idle ones (the `aliveAppIds` MRU list is the hook).

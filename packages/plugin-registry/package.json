@@ -1,0 +1,26 @@
+{
+  "name": "@ff/plugin-registry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ff-package-plugin": "./scripts/package-plugin.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "package-plugin": "tsx scripts/package-plugin.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "hono": "^4.6.14",
+    "nanotar": "^0.2.0",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}

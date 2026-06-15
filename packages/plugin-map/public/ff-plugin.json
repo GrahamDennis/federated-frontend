@@ -1,0 +1,9 @@
+{
+  "id": "world-map",
+  "name": "World Map",
+  "version": "0.0.0",
+  "kind": "plugin",
+  "entry": "index.html",
+  "description": "A MapLibre GL map (an integrated plugin). It uses only the capability API: it registers ⌘K fly-to commands and raises toasts, with no remote-dom contributions.",
+  "detailApps": ["places"]
+}
