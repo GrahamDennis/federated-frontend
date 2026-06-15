@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:oci": "FF_REGISTRY_CONFIG=registry.config.oci.yaml tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "package-plugin": "tsx scripts/package-plugin.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"

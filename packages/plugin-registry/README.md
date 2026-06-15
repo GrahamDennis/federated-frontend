@@ -31,32 +31,56 @@ step copies it into the bundle and also lifts it into the artifact's **config
 blob**, so discovery can read metadata cheaply without pulling content. CDN
 bundles expose the same file at `<url>/ff-plugin.json`.
 
-## Run it
+## Running the registry
+
+The host always discovers its apps from the registry; what differs is what backs
+the registry. Two modes, selected by which config file is loaded (`:5180`):
+
+### Dev mode — backed by the Vite dev servers (no OCI needed)
+
+`registry.config.yaml` (the default) points each plugin at its Vite dev server,
+so the dev loop needs no OCI registry:
 
 ```bash
-# 1. A local OCI registry (zot, standalone binary — no Docker). Listens on :5001.
+npm run dev -w @ff/plugin-registry
+```
+
+`npm run dev` at the **repo root** already starts this alongside the host and the
+three plugin dev servers — so normally you don't run it by hand.
+
+### OCI ("oras") mode — backed by content-addressed artifacts
+
+`registry.config.oci.yaml` declares `oci` sources. This is the deployed path:
+plugins are pulled from an OCI registry and served content-addressed. First
+publish the plugins, then run the registry against the OCI config.
+
+**Dependencies:** a local OCI registry (zot — standalone binary, no Docker) and
+the `oras` push CLI.
+
+```bash
+# 1. Start a local OCI registry (zot). Downloads the binary on first run; :5001.
 packages/plugin-registry/scripts/zot.sh
 
 # 2. Install the push tool (once).
 brew install oras
 
-# 3. Build + push the plugins as artifacts. Run from the repo root (the script
-#    resolves the plugin dir against the cwd, so don't use `npm -w`).
+# 3. Build + push each plugin as an ORAS-style artifact. Run from the REPO ROOT
+#    (the script resolves the plugin dir against the cwd, so don't use `npm -w`).
 npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/plugin-example --tag dev
 npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/plugin-map     --tag dev
 npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/plugin-places  --tag dev
+#    package-plugin options: --tag <tag> --registry <host> --repo-prefix <p> --no-build
 
-# 4a. Dev: registry backed by the Vite dev servers (default config). :5180
-npm run dev -w @ff/plugin-registry
+# 4. Run the registry against the OCI config (the dev:oci script sets FF_REGISTRY_CONFIG).
+npm run dev:oci -w @ff/plugin-registry
 
-# 4b. Deployed: registry backed by the OCI artifacts you just pushed.
-FF_REGISTRY_CONFIG=packages/plugin-registry/registry.config.oci.yaml npm run dev -w @ff/plugin-registry
-
-# 5. Inspect — OCI-backed responses carry content-addressed /content/<repo>@<digest>/ URLs.
+# 5. Inspect — responses now carry content-addressed /content/<repo>@<digest>/ URLs.
 curl localhost:5180/v1/plugins | jq
 ```
 
-Port 5000 is avoided deliberately — macOS AirPlay Receiver squats on it.
+To point the **host** at this, it already targets `:5180`, so just run the host
+(`npm run dev:host`) with the registry in OCI mode. Port 5000 is avoided
+deliberately — macOS AirPlay Receiver squats on it.
 
 ## Config
 

@@ -218,8 +218,9 @@ npm test          # Playwright e2e (boots all the dev servers automatically)
 The host discovers its apps from the plugin registry (`:5180`), which in dev is
 backed by the plugin dev servers — so no OCI registry is needed for the dev loop.
 To exercise the **deployed** path (plugins served from an OCI registry as
-content-addressed artifacts), see `packages/plugin-registry/README.md`: run a
-local zot, `oras push` the plugins, and point a source at `type: oci`.
+content-addressed artifacts) — start a local zot, `oras push` the plugins, then
+run the registry in OCI mode (`npm run dev:oci -w @ff/plugin-registry`). The full
+step-by-step (both modes + publishing) is in `packages/plugin-registry/README.md`.
 
 Try: the **Open details / Quick save** buttons in the top nav (contributed by the
 plugin via remote-dom), **⌘K** for the plugin's commands, and the buttons inside
