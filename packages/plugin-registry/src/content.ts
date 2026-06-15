@@ -2,6 +2,7 @@ import {readFile} from 'node:fs/promises';
 import {extname} from 'node:path';
 import {Hono} from 'hono';
 import type {ContentCache} from './cache.ts';
+import type {Resolver} from './resolver.ts';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -27,31 +28,45 @@ const MIME: Record<string, string> = {
 const PREFIX = '/content/';
 
 /**
- * The dumb, content-addressed half. `GET /content/<digest>/<path>` serves a file
- * from the unpacked bundle identified by `<digest>` (an OCI manifest digest).
- * It knows nothing about tags or discovery — only digests — so its responses are
- * immutable and cacheable forever.
+ * The dumb, content-addressed half. `GET /content/<repo>@<digest>/<path>` serves
+ * a file from the unpacked bundle identified by an OCI manifest `<digest>`. The
+ * `<repo>` makes the URL self-documenting (which plugin) and self-locating: the
+ * registry to pull from is looked up from config by repo (which is also the
+ * safety allowlist — unconfigured repos are refused). It knows nothing about
+ * tags, so its responses are immutable and cacheable forever.
  */
-export function contentRouter(cache: ContentCache): Hono {
+export function contentRouter(cache: ContentCache, resolver: Resolver): Hono {
   const app = new Hono();
 
   app.get('/content/*', async (c) => {
     const rest = decodeURIComponent(c.req.path.slice(PREFIX.length));
-    const slash = rest.indexOf('/');
-    const digest = slash === -1 ? rest : rest.slice(0, slash);
-    let filePath = slash === -1 ? '' : rest.slice(slash + 1);
+    // `<repo>@<digest>/<file>` — repo may contain slashes; split on the first `@`
+    // (registries/repos never contain one), then the digest runs to the next `/`.
+    const at = rest.indexOf('@');
+    if (at === -1) {
+      return c.text('content paths look like /content/<repo>@<digest>/<file>', 400);
+    }
+    const repository = rest.slice(0, at);
+    const afterAt = rest.slice(at + 1);
+    const slash = afterAt.indexOf('/');
+    const digest = slash === -1 ? afterAt : afterAt.slice(0, slash);
+    let filePath = slash === -1 ? '' : afterAt.slice(slash + 1);
 
     if (!digest.startsWith('sha256:')) {
       return c.text('content paths are addressed by sha256 digest', 400);
+    }
+    const registry = resolver.registryForRepo(repository);
+    if (!registry) {
+      return c.text(`repository not configured: ${repository}`, 404);
     }
     if (filePath === '' || filePath.endsWith('/')) filePath += 'index.html';
 
     let bundleDir: string;
     try {
-      bundleDir = await cache.ensure(digest);
+      bundleDir = await cache.ensure(registry, repository, digest);
     } catch (err) {
-      // Unknown digest, or a registry that is down / lacks the artifact.
-      return c.text(`cannot serve ${digest}: ${(err as Error).message}`, 404);
+      // Registry down, or the artifact/digest doesn't exist there.
+      return c.text(`cannot serve ${repository}@${digest}: ${(err as Error).message}`, 404);
     }
 
     const abs = cache.resolveFile(bundleDir, filePath);

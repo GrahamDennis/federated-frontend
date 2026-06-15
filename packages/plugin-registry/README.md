@@ -4,20 +4,24 @@ Distributes federated-frontend plugins as **ORAS-style OCI artifacts** and serve
 them to host applications. One process, two responsibilities behind a shared
 source resolver:
 
-- **Content (dumb, content-addressed):** `GET /content/<digest>/<path>` serves a
-  file from the unpacked bundle identified by an OCI manifest `<digest>`. It knows
-  only digests — never tags — so responses are immutable (`Cache-Control:
-  immutable`).
+- **Content (dumb, content-addressed):** `GET /content/<repo>@<digest>/<path>`
+  serves a file from the unpacked bundle identified by an OCI manifest `<digest>`.
+  The `<repo>` is the artifact's own coordinate, so the URL is self-documenting
+  (which plugin) and self-locating — the registry to pull from is looked up from
+  config by repo. It knows nothing about tags, so responses are immutable
+  (`Cache-Control: immutable`). Example:
+  `/content/ff-plugins/world-map@sha256:76bb…/index.html`.
 - **Discovery:** `GET /v1/plugins?<filters>` returns each configured plugin's
   manifest plus an **immutable** content URL. For OCI-by-tag sources the tag is
-  resolved to a digest at query time and a `/content/<digest>/` URL is minted, so
-  the moving tag never reaches the host. For CDN sources the configured immutable
-  URL is returned unchanged.
+  resolved to a digest at query time and a `/content/<repo>@<digest>/` URL is
+  minted, so the moving tag never reaches the host. For CDN sources the configured
+  immutable URL is returned unchanged.
 
 Combining them is deliberate: both halves need the same thing — the source list
-and the tag→digest resolver. The resolver records a `digest → repo` index so the
-content endpoint can pull a bare digest (and rejects digests that aren't from a
-configured source — that's also the safety allowlist).
+and the tag→digest resolver. The content endpoint takes the repo straight from
+the request URL, so it keeps no digest→repo index; it only maps a configured repo
+to its registry host, which doubles as the safety allowlist (unconfigured repos
+are refused, so it can't be used as an open pull-proxy).
 
 ## What a plugin is on the wire
 
@@ -48,7 +52,7 @@ npm run dev -w @ff/plugin-registry
 # 4b. Deployed: registry backed by the OCI artifacts you just pushed.
 FF_REGISTRY_CONFIG=packages/plugin-registry/registry.config.oci.yaml npm run dev -w @ff/plugin-registry
 
-# 5. Inspect — OCI-backed responses carry content-addressed /content/<digest>/ URLs.
+# 5. Inspect — OCI-backed responses carry content-addressed /content/<repo>@<digest>/ URLs.
 curl localhost:5180/v1/plugins | jq
 ```
 
@@ -69,7 +73,7 @@ src/
   oci/client.ts  pull-only OCI distribution client (manifests + blobs)
   resolver.ts    sources -> digests/manifests; digest -> repo index; TTL cache
   cache.ts       content-addressed on-disk cache of unpacked bundles
-  content.ts     GET /content/<digest>/<path>
+  content.ts     GET /content/<repo>@<digest>/<path>
   discovery.ts   GET /v1/plugins
   server.ts      wiring (Hono + @hono/node-server)
 scripts/

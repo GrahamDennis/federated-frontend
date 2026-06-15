@@ -47,8 +47,11 @@ function toResolvedPlugin(s: ResolvedSource, contentBase: string): ResolvedPlugi
   if (s.kind === 'external') {
     return {...manifest, key: s.key, url: s.url, entryUrl: s.url};
   }
+  // OCI content URL = the artifact's own coordinate: /content/<repo>@<digest>/.
+  // The repo makes it self-documenting; `@` and `:` are path-safe, so neither is
+  // percent-encoded (reads as `…/content/ff-plugins/world-map@sha256:0636…/`).
   const url =
-    s.kind === 'oci' ? `${contentBase}/content/${encodeURIComponent(s.digest)}/` : s.url;
+    s.kind === 'oci' ? `${contentBase}/content/${s.repository}@${s.digest}/` : s.url;
   return {
     ...manifest,
     key: s.key,

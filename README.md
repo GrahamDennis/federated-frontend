@@ -43,7 +43,7 @@ packages/
                     the place selected in the shared workspace context.
   plugin-registry/  :5180  Plugin distribution + discovery. Packages plugins as
                     ORAS-style OCI artifacts and serves them: a dumb
-                    content-addressed endpoint (/content/<digest>/) plus a
+                    content-addressed endpoint (/content/<repo>@<digest>/) plus a
                     discovery API (/v1/plugins). The host discovers all its apps
                     here — it hardcodes no individual plugin. See its README.
 ```

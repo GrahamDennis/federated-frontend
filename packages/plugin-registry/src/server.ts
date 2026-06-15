@@ -14,10 +14,10 @@ const PORT = Number(process.env.PORT ?? 5180);
 
 const config = await loadConfig(CONFIG_PATH);
 const resolver = new Resolver(config);
-const cache = new ContentCache(resolver);
+const cache = new ContentCache(resolver.client);
 
 const app = new Hono();
-app.get('/', (c) => c.json({service: '@ff/plugin-registry', endpoints: ['/v1/plugins', '/content/:digest/*']}));
+app.get('/', (c) => c.json({service: '@ff/plugin-registry', endpoints: ['/v1/plugins', '/content/<repo>@<digest>/*']}));
 // Preflight for the discovery API (host fetches it cross-origin).
 app.options('/v1/*', (c) =>
   c.body(null, 204, {
@@ -27,10 +27,9 @@ app.options('/v1/*', (c) =>
   }),
 );
 app.route('/', discoveryRouter(resolver, config));
-app.route('/', contentRouter(cache));
+app.route('/', contentRouter(cache, resolver));
 
-// Warm tag resolution at startup so the digest->repo index is populated and the
-// first content request isn't cold (best-effort; failures are logged).
+// Warm tag resolution at startup so /v1/plugins is ready immediately (best-effort).
 resolver
   .resolveAll(true)
   .then((s) => console.log(`[registry] resolved ${s.length} plugin(s) from ${CONFIG_PATH}`))
@@ -39,5 +38,5 @@ resolver
 serve({fetch: app.fetch, port: PORT}, ({port}) => {
   console.log(`[registry] listening on http://localhost:${port}`);
   console.log(`[registry]   discovery: http://localhost:${port}/v1/plugins`);
-  console.log(`[registry]   content:   http://localhost:${port}/content/<digest>/`);
+  console.log(`[registry]   content:   http://localhost:${port}/content/<repo>@<digest>/`);
 });

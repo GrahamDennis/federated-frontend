@@ -3,30 +3,32 @@ import {mkdir, rename, rm, writeFile, access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join, normalize, sep} from 'node:path';
 import {parseTar} from 'nanotar';
-import {PLUGIN_CONTENT_MEDIA_TYPE} from './oci/client.ts';
-import type {Resolver} from './resolver.ts';
+import {type OciClient, PLUGIN_CONTENT_MEDIA_TYPE} from './oci/client.ts';
 
 const ROOT = process.env.FF_CONTENT_CACHE ?? join(tmpdir(), 'ff-plugin-content');
 
 /**
  * A content-addressed, on-disk cache of unpacked plugin bundles, keyed by OCI
  * manifest digest. Because the key is a digest the content is immutable, so an
- * extracted bundle is reused forever once present.
+ * extracted bundle is reused forever once present. The registry + repository to
+ * pull from are supplied by the caller (read out of the request URL).
  */
 export class ContentCache {
   /** digest -> extraction promise, to coalesce concurrent first-requests. */
   private readonly inflight = new Map<string, Promise<string>>();
 
-  constructor(private readonly resolver: Resolver) {}
+  constructor(private readonly client: OciClient) {}
 
   /** Ensure a digest is extracted; returns the absolute bundle directory. */
-  async ensure(digest: string): Promise<string> {
+  async ensure(registry: string, repository: string, digest: string): Promise<string> {
     const dir = join(ROOT, digest.replace(/[:/]/g, '_'));
     if (await exists(join(dir, '.extracted'))) return dir;
 
     let pending = this.inflight.get(digest);
     if (!pending) {
-      pending = this.extract(digest, dir).finally(() => this.inflight.delete(digest));
+      pending = this.extract(registry, repository, digest, dir).finally(() =>
+        this.inflight.delete(digest),
+      );
       this.inflight.set(digest, pending);
     }
     return pending;
@@ -43,16 +45,18 @@ export class ContentCache {
     return abs;
   }
 
-  private async extract(digest: string, dir: string): Promise<string> {
-    const loc = await this.resolver.locate(digest);
-    if (!loc) throw new Error(`unknown digest (not from a configured source): ${digest}`);
-
-    const {manifest} = await this.resolver.client.getManifest(loc.registry, loc.repository, digest);
+  private async extract(
+    registry: string,
+    repository: string,
+    digest: string,
+    dir: string,
+  ): Promise<string> {
+    const {manifest} = await this.client.getManifest(registry, repository, digest);
     const layer =
       manifest.layers.find((l) => l.mediaType === PLUGIN_CONTENT_MEDIA_TYPE) ?? manifest.layers[0];
     if (!layer) throw new Error(`artifact ${digest} has no content layer`);
 
-    const gz = await this.resolver.client.getBlob(loc.registry, loc.repository, layer.digest);
+    const gz = await this.client.getBlob(registry, repository, layer.digest);
     const files = parseTar(gunzipSync(gz));
 
     // Extract into a temp dir, then atomically swap into place.

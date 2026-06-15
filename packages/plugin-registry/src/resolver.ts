@@ -3,17 +3,13 @@ import {OciClient, parseRef} from './oci/client.ts';
 
 /** A config entry resolved to immutable coordinates + its plugin manifest. */
 export type ResolvedSource =
-  | {kind: 'oci'; key: string; manifest: PluginManifest; digest: string}
+  // The OCI coordinate (registry + repository + digest) is carried through so the
+  // discovery URL can be the full, self-locating artifact reference.
+  | {kind: 'oci'; key: string; manifest: PluginManifest; registry: string; repository: string; digest: string}
   // `url` ends with `/`; the content base. Entry is appended for the entry URL.
   | {kind: 'http'; key: string; manifest: PluginManifest; url: string}
   // `url` is used verbatim as both content and entry URL (no bundle).
   | {kind: 'external'; key: string; manifest: PluginManifest; url: string};
-
-/** Where to pull an OCI manifest digest from. */
-interface RepoLocation {
-  registry: string;
-  repository: string;
-}
 
 const TTL_MS = 30_000;
 
@@ -32,23 +28,38 @@ function normaliseManifest(raw: Partial<PluginManifest>, key: string): PluginMan
 }
 
 /**
- * Resolves configured sources to immutable manifests, and (for OCI) records a
- * `manifest-digest -> repo` index so the content endpoint can pull a bare
- * digest. Tag resolution is cached for {@link TTL_MS}; pass `force` to refresh.
+ * Resolves configured sources to immutable manifests. Tag resolution is cached
+ * for {@link TTL_MS}; pass `force` to refresh. The content endpoint reads the
+ * repo to pull from straight out of the request URL (`/content/<repo>@<digest>/`),
+ * so the resolver keeps no digest→repo index — it only maps a configured repo to
+ * its registry host ({@link registryForRepo}), which doubles as the content
+ * endpoint's safety allowlist (unconfigured repos resolve to undefined).
  */
 export class Resolver {
   private readonly oci: OciClient;
-  private readonly locations = new Map<string, RepoLocation>();
+  /** repository -> registry host, for every configured OCI source. */
+  private readonly repoRegistry = new Map<string, string>();
   private cache: {at: number; sources: ResolvedSource[]} | undefined;
   private inflight: Promise<{sources: ResolvedSource[]; allOk: boolean}> | undefined;
 
   constructor(private readonly config: RegistryConfig) {
     this.oci = new OciClient(config.insecureRegistries ?? []);
+    for (const entry of Object.values(config.plugins)) {
+      if (entry.source.type === 'oci') {
+        const {registry, repository} = parseRef(entry.source.ref);
+        this.repoRegistry.set(repository, registry);
+      }
+    }
   }
 
   /** The OCI client, shared with the content cache for blob pulls. */
   get client(): OciClient {
     return this.oci;
+  }
+
+  /** The registry host for a configured repository, or undefined (= not allowed). */
+  registryForRepo(repository: string): string | undefined {
+    return this.repoRegistry.get(repository);
   }
 
   async resolveAll(force = false): Promise<ResolvedSource[]> {
@@ -67,13 +78,6 @@ export class Resolver {
     // pinned as missing for the whole TTL.
     if (allOk) this.cache = {at: Date.now(), sources};
     return sources;
-  }
-
-  /** Look up where to pull an OCI manifest digest, refreshing once on a miss. */
-  async locate(digest: string): Promise<RepoLocation | undefined> {
-    if (this.locations.has(digest)) return this.locations.get(digest);
-    await this.resolveAll(true);
-    return this.locations.get(digest);
   }
 
   private async doResolveAll(): Promise<{sources: ResolvedSource[]; allOk: boolean}> {
@@ -101,11 +105,17 @@ export class Resolver {
     if (src.type === 'oci') {
       const {registry, repository, reference} = parseRef(src.ref);
       const {digest, manifest} = await this.oci.getManifest(registry, repository, reference);
-      this.locations.set(digest, {registry, repository});
 
       const configBytes = await this.oci.getBlob(registry, repository, manifest.config.digest);
       const fromSource = JSON.parse(new TextDecoder().decode(configBytes)) as Partial<PluginManifest>;
-      return {kind: 'oci', key, digest, manifest: normaliseManifest({...fromSource, ...overrides}, key)};
+      return {
+        kind: 'oci',
+        key,
+        registry,
+        repository,
+        digest,
+        manifest: normaliseManifest({...fromSource, ...overrides}, key),
+      };
     }
 
     if (src.type === 'external') {
