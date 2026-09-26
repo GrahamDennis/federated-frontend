@@ -1,10 +1,13 @@
 # Layouts: slot grids, predefined views, and the road to an app builder
 
-Status: prototype implemented in the host (`packages/host/src/layout.ts`,
-`useLayouts.ts`, `LayoutStage.tsx`, `instances.ts`, `instanceFeed.ts`,
-`expressions.ts`, `commands.ts`); tests in `tests/layout.spec.ts`,
-`tests/blocks.spec.ts`, `tests/wiring.spec.ts`, `tests/expressions.spec.ts` and
-`tests/actions.spec.ts`.
+Status: prototype. The model (views, blocks, wiring, CEL, validation) is the
+shared package `packages/layout-model`, used by both the host and the layout
+service. The host UI is in `packages/host/src` (`useLayouts.ts`,
+`LayoutStage.tsx`, `instances.ts`, `instanceFeed.ts`, `commands.ts`,
+`layoutClient.ts`). The service is `packages/layout-service`. Tests are in
+`tests/layout.spec.ts`, `tests/blocks.spec.ts`, `tests/wiring.spec.ts`,
+`tests/expressions.spec.ts`, `tests/actions.spec.ts` and
+`tests/layout-service.spec.ts`.
 
 ## Why slots and not windows
 
@@ -46,7 +49,7 @@ view unchanged if the result would break one.
 
 | | Who | Changes | Persistence |
 |---|---|---|---|
-| **Edit mode** ("✎ Edit layouts") | admin/author | grid size, slot geometry (drag to move, corner handle to resize, `+` on an empty cell to add, ✕ to remove), which block each slot shows, block names and settings (⚙), create/duplicate/delete/rename views | saved views + block registry (localStorage in the prototype; a backend per role/mission in production) |
+| **Edit mode** ("✎ Edit layouts") | admin/author | grid size, slot geometry (drag to move, corner handle to resize, `+` on an empty cell to add, ✕ to remove), which block each slot shows, block names and settings (⚙), create/duplicate/delete/rename views | saved views + block registry (the layout service, per workspace and role; localStorage if the service is unreachable) |
 | **User mode** | operator | switch view (drop-down); change a slot's block (per-slot drop-down: pick an existing block, which **swaps** if it's shown elsewhere, or "+ New <app>" for another instance); enlarge a slot one cell at a time (⋯ → Expand ◀▶▲▼) or maximize it (⛶, or double-click the header) | ad-hoc copy per view, discarded by "Reset view". Enlargement is cleared when the view changes. A block created here is added to the registry, but only the slot assignment is ad hoc |
 
 When a slot is enlarged, the slots it overlaps are **covered**. Their apps stay
@@ -235,6 +238,54 @@ instance's viewport is `bboxAround(histogram.selection, 1500)`, so it lists the
 cities within 1,500 km of whatever you pick in the first. Places shows
 `nearby.?selection.orValue(histogram.selection)`.
 
+## Layout service: roles, workspaces, server-side validation
+
+Saved views and blocks are served by `@ff/layout-service` (:5181, Hono,
+configured by `layout-service.config.yaml`):
+
+| Endpoint | Who | What |
+|---|---|---|
+| `GET /v1/roles` | anyone | The roles and which of them can edit |
+| `GET /v1/layouts` | any role | That role's views plus the block registry. Editors see every view; other roles see views whose `roles` include them |
+| `PUT /v1/layouts/views/:id` | editors | Save a view with the block registry, **after validation**; `422` with the errors if invalid |
+| `DELETE /v1/layouts/views/:id`, `POST /v1/layouts/reset` | editors | Delete a view (not the last one), or reseed the defaults |
+| `POST /v1/validate` | anyone | Validate without saving |
+
+**Roles.** Each view has a `roles` list, and editor roles see every view. The
+defaults' roles come from config (`seedViewRoles`), e.g. the cockpit-style
+views for `pilot` and the analysis views for `analyst`. In edit mode, the "Visible
+to" checkboxes set a view's roles.
+
+**Workspaces.** Layouts are stored per workspace (tenant), persisted as one JSON
+file each under `.data/`, or in memory with `FF_LAYOUT_EPHEMERAL=1`. A new
+workspace is seeded from the model's defaults. The e2e tests give each test its
+own workspace, so tests running in parallel don't see each other's saves.
+
+**Identity is a prototype.** The host sends the chosen role and workspace as
+`X-FF-Role` / `X-FF-Workspace` headers, and nothing authenticates them. A real
+deployment would derive both from an authenticated session (e.g. OIDC claims)
+and enforce them in the service. The service is already the point of
+enforcement: editing is refused (`403`) for roles without `canEdit`, whatever
+the UI shows.
+
+**Server-side validation** runs `validateLayout` from `@ff/layout-model`, the
+same code the host uses:
+
+- grid bounds, slot overlaps and duplicate slot ids;
+- unknown blocks or apps, and invalid or clashing expression names;
+- for every binding: that the input exists, that a direct source's output
+  exists and has a compatible type, and that a CEL expression parses and
+  type-checks to the input's type.
+
+The plugins' typed ports come from the plugin registry's discovery API. A
+rejected save leaves the editor open with the server's errors listed.
+
+**Fallback.** If the service can't be reached, the host shows **"○ Local only"**
+and uses this browser's localStorage, which was the only mode before the
+service existed. The shared model is the same either way. In local mode there
+are no roles, and ad-hoc per-user changes aren't stored on the server in
+either mode.
+
 ## Action buttons
 
 The `actions` plugin (`packages/plugin-actions`) is a block of buttons that the
@@ -302,8 +353,12 @@ Still to do:
 
 ## Known gaps
 
-- Views persist per browser (localStorage). There's no server, no roles, no
-  sharing of saved views yet.
+- Roles and workspaces are unauthenticated headers (see "Layout service"
+  above). Real identity is the main thing between this and production use.
+- Per-user ad-hoc changes (a swapped slot, a block created in user mode) live
+  only in the page. They aren't saved per user on the server.
+- Saving a view also saves the whole block registry, last writer wins. There's
+  no concurrency control (e.g. ETags) between two editors.
 - Ad-hoc slot changes aren't encoded in the URL. Only the view id is.
 - Adding a slot is click-per-cell then resize. There's no rubber-band draw, and
   no keyboard-accessible move/resize yet (the pickers and menus are keyboard

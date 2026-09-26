@@ -5,7 +5,7 @@ import {defineConfig, devices} from '@playwright/test';
  * and exercise the cross-origin plugin channels (capability RPC + remote-dom).
  *
  * `webServer` boots the dev servers automatically (host :5173, plugin registry
- * :5180, and the five plugin dev servers :5174–:5178), so `npm test` is
+ * :5180, layout service :5181, and the five plugin dev servers :5174–:5178), so `npm test` is
  * self-contained. The host discovers its apps from the registry, which in dev is
  * backed by the plugin dev servers. We drive the locally installed Google Chrome
  * via the `chrome` channel, so no Playwright browser download is required.
@@ -38,6 +38,16 @@ export default defineConfig({
       command: 'npm run dev:registry',
       url: 'http://localhost:5180/',
       reuseExistingServer: !process.env.CI,
+      stdout: 'ignore',
+      stderr: 'pipe',
+    },
+    {
+      // In-memory stores, so runs start clean; each test also uses its own
+      // workspace (see tests/fixtures.ts), so parallel tests don't collide.
+      command: 'npm run dev:layouts',
+      url: 'http://localhost:5181/',
+      reuseExistingServer: !process.env.CI,
+      env: {FF_LAYOUT_EPHEMERAL: '1'},
       stdout: 'ignore',
       stderr: 'pipe',
     },

@@ -940,3 +940,44 @@ code {
 .expr-ref.expr-command {
   color: var(--success);
 }
+
+/* Layout service: source badge, visibility and server-side save errors. */
+.source-badge {
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+}
+.source-badge.service {
+  color: var(--success);
+  border-color: var(--success);
+}
+.source-badge.local {
+  color: #d29922;
+  border-color: #d29922;
+}
+.layout-visibility {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--subdued);
+}
+.layout-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+}
+.layout-errors {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border: 1px solid var(--critical);
+  border-radius: 8px;
+  color: var(--critical);
+  font-size: 12px;
+}
+.layout-errors code {
+  color: var(--text);
+}

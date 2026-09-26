@@ -1,7 +1,13 @@
 import {resolveSettings, type BlockSettings} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
-import {blockFor, blockName, type Block, type BlockRegistry} from './layout';
-import type {ExprScope} from './expressions';
+import {
+  blockFor,
+  blockName,
+  scopeFor,
+  type Block,
+  type BlockRegistry,
+  type ExprScope,
+} from '@ff/layout-model';
 
 /**
  * A runnable instance of an app: what the chrome actually mounts (one iframe +
@@ -47,13 +53,5 @@ export function knownInstances(blocks: BlockRegistry, apps: AppDescriptor[]): In
 
 /** Every known block with outputs, as the scope derived expressions can read. */
 export function exprScope(blocks: BlockRegistry, apps: AppDescriptor[]): ExprScope {
-  return knownInstances(blocks, apps)
-    .filter((i) => i.app.outputs)
-    .map((i) => ({
-      name: i.name,
-      blockId: i.id,
-      outputs: Object.fromEntries(
-        Object.entries(i.app.outputs!).map(([output, port]) => [output, port.type]),
-      ),
-    }));
+  return scopeFor(blocks, apps);
 }

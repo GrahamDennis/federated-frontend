@@ -1,4 +1,4 @@
-import {useCallback, useLayoutEffect, useMemo, useState} from 'preact/hooks';
+import {useCallback, useEffect, useLayoutEffect, useMemo, useState} from 'preact/hooks';
 import type {BlockSettings} from '@ff/protocol';
 import {
   DEFAULT_BLOCKS,
@@ -17,7 +17,9 @@ import {
   type Direction,
   type Enlargement,
   type LayoutView,
-} from './layout';
+  type ValidationError,
+} from '@ff/layout-model';
+import {LayoutClient, LayoutRejected, type Role, type ServedLayouts} from './layoutClient';
 
 const STORAGE_KEY = 'ff.layouts.v2';
 const LEGACY_STORAGE_KEY = 'ff.layout-views.v1';
@@ -58,9 +60,8 @@ function withNewDefaults(stored: Stored): Stored {
 }
 
 /**
- * Saved views and blocks are the admin-authored definitions. In a real
- * deployment they'd be served (per role / per mission) by a backend; for the
- * prototype they persist in localStorage, seeded with the defaults.
+ * Local mode (no layout service reachable): saved views and blocks persist in
+ * localStorage, seeded with the defaults.
  */
 function load(): Stored {
   try {
@@ -95,6 +96,33 @@ function store(stored: Stored): void {
   }
 }
 
+const ROLE_KEY = 'ff.role';
+const WORKSPACE_KEY = 'ff.workspace';
+
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // A per-viewer convenience only.
+  }
+}
+
+/** Shown when a role can see no views at all. */
+const NO_VIEWS: LayoutView = {id: '__none', name: 'No views for this role', cols: 1, rows: 1, slots: []};
+
+/**
+ * Where layouts come from: the layout service (per role and workspace), or —
+ * if it can't be reached — localStorage, as before.
+ */
+export type LayoutSource = 'loading' | 'service' | 'local';
+
 interface Draft {
   view: LayoutView;
   blocks: BlockRegistry;
@@ -123,21 +151,76 @@ function useDraftViewUpdater(setDraft: (fn: (d: Draft | null) => Draft | null) =
 }
 
 export function useLayouts(initialViewId: string | null) {
-  const [saved, setSaved] = useState<Stored>(load);
+  const [saved, setSaved] = useState<Stored>({views: [], blocks: {}});
   const {views} = saved;
-  const [activeViewId, setActiveViewId] = useState<string>(() =>
-    views.some((v) => v.id === initialViewId) ? initialViewId! : views[0].id,
-  );
+  const [activeViewId, setActiveViewId] = useState<string>(initialViewId ?? '');
+
+  // ---- Source: the layout service, per role + workspace; or local fallback ----
+  const [source, setSource] = useState<LayoutSource>('loading');
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [role, setRoleState] = useState<string | null>(null);
+  const [canEdit, setCanEdit] = useState(true);
+  const [workspace] = useState(() => {
+    const ws = readPref(WORKSPACE_KEY);
+    return ws && /^[A-Za-z0-9_-]{1,64}$/.test(ws) ? ws : 'default';
+  });
+  const client = useMemo(() => (role ? new LayoutClient(role, workspace) : null), [role, workspace]);
+  const [saveErrors, setSaveErrors] = useState<ValidationError[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const goLocal = useCallback(() => {
+    setSource('local');
+    setSaved(load());
+    setCanEdit(true);
+    setRoles([]);
+  }, []);
+
+  // Which roles exist, and ours (remembered per viewer; else the default).
+  useEffect(() => {
+    let cancelled = false;
+    LayoutClient.roles()
+      .then(({defaultRole, roles}) => {
+        if (cancelled) return;
+        setRoles(roles);
+        const preferred = readPref(ROLE_KEY);
+        setRoleState(roles.some((r) => r.id === preferred) ? preferred : defaultRole);
+      })
+      .catch(() => !cancelled && goLocal());
+    return () => {
+      cancelled = true;
+    };
+  }, [goLocal]);
+
+  const applyServed = useCallback((served: ServedLayouts) => {
+    setSaved({views: served.views, blocks: served.blocks});
+    setCanEdit(served.canEdit);
+    setSource('service');
+  }, []);
+
+  // The layouts this role may see, whenever the role changes.
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+    client
+      .load()
+      .then((served) => !cancelled && applyServed(served))
+      .catch(() => !cancelled && goLocal());
+    return () => {
+      cancelled = true;
+    };
+  }, [client, applyServed, goLocal]);
   const [liveByView, setLiveByView] = useState<Record<string, LayoutView>>({});
   const [enlargement, setEnlargement] = useState<Enlargement | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const updateDraftView = useDraftViewUpdater(setDraft);
 
-  // Persist in the commit (a layout effect), not after paint: a plain effect
-  // can lose the write if the page is closed or reloaded right after Save.
-  useLayoutEffect(() => store(saved), [saved]);
+  // Local mode only. Persist in the commit (a layout effect), not after paint:
+  // a plain effect can lose the write if the page is reloaded right after Save.
+  useLayoutEffect(() => {
+    if (source === 'local') store(saved);
+  }, [saved, source]);
 
-  const savedView = views.find((v) => v.id === activeViewId) ?? views[0];
+  const savedView = views.find((v) => v.id === activeViewId) ?? views[0] ?? NO_VIEWS;
   const live = liveByView[savedView.id] ?? savedView;
   /** What's on screen: the draft while editing, else the live copy. */
   const view = draft?.view ?? live;
@@ -288,10 +371,28 @@ export function useLayouts(initialViewId: string | null) {
 
   const restoreSlot = useCallback(() => setEnlargement(null), []);
 
+  /** Switch role (service mode): reloads the layouts that role may see. */
+  const setRole = useCallback((next: string) => {
+    writePref(ROLE_KEY, next);
+    setRoleState(next);
+    setDraft(null);
+    setLiveByView({});
+    setEnlargement(null);
+    setSaveErrors([]);
+  }, []);
+
+  /** Which roles may use the view being edited (service mode). */
+  const setViewRoles = useCallback(
+    (next: string[]) => updateDraftView((v) => ({...v, roles: next})),
+    [updateDraftView],
+  );
+
   // ---- Edit mode ----
   const startEditing = useCallback(() => {
+    if (savedView === NO_VIEWS) return;
     setDraft({view: structuredClone(savedView), blocks: structuredClone(saved.blocks), isNew: false});
     setEnlargement(null);
+    setSaveErrors([]);
   }, [savedView, saved.blocks]);
 
   const newDraft = useCallback((copyOf?: LayoutView) => {
@@ -306,11 +407,49 @@ export function useLayouts(initialViewId: string | null) {
   }, [saved.blocks]);
 
 
-  const cancelEditing = useCallback(() => setDraft(null), []);
+  const cancelEditing = useCallback(() => {
+    setDraft(null);
+    setSaveErrors([]);
+  }, []);
+
+  /** Run a service mutation; a rejection (e.g. validation) keeps the draft open. */
+  const mutate = useCallback(
+    async (call: (c: LayoutClient) => Promise<ServedLayouts>, after?: (s: ServedLayouts) => void) => {
+      if (!client) return;
+      setSaving(true);
+      try {
+        const served = await call(client);
+        applyServed(served);
+        setDraft(null);
+        setSaveErrors([]);
+        after?.(served);
+      } catch (error) {
+        setSaveErrors(
+          error instanceof LayoutRejected && error.errors.length > 0
+            ? error.errors
+            : [{path: '', message: error instanceof Error ? error.message : String(error)}],
+        );
+      } finally {
+        setSaving(false);
+      }
+    },
+    [client, applyServed],
+  );
 
   const saveDraft = useCallback(() => {
     if (!draft) return;
     const {view: next, blocks: nextBlocks} = draft;
+    if (source === 'service') {
+      // The service validates (CEL, wiring, geometry) and may reject the save.
+      void mutate(
+        (c) => c.saveView(next, nextBlocks),
+        () => {
+          setLiveByView(({[next.id]: _dropped, ...rest}) => rest);
+          setActiveViewId(next.id);
+        },
+      );
+      return;
+    }
     setSaved((s) => ({
       ...s,
       blocks: nextBlocks,
@@ -322,26 +461,46 @@ export function useLayouts(initialViewId: string | null) {
     setLiveByView(({[next.id]: _dropped, ...rest}) => rest);
     setActiveViewId(next.id);
     setDraft(null);
-  }, [draft]);
+  }, [draft, source, mutate]);
 
   const deleteView = useCallback(() => {
     if (!draft) return;
     const remaining = views.filter((v) => v.id !== draft.view.id);
     if (remaining.length === 0) return;
+    if (source === 'service') {
+      void mutate((c) => c.deleteView(draft.view.id), () => setActiveViewId(remaining[0].id));
+      return;
+    }
     setSaved((s) => ({...s, views: remaining}));
     setActiveViewId(remaining[0].id);
     setDraft(null);
-  }, [draft, views]);
+  }, [draft, views, source, mutate]);
 
   const resetToDefaults = useCallback(() => {
+    if (source === 'service') {
+      void mutate((c) => c.reset(), () => {
+        setLiveByView({});
+        setEnlargement(null);
+      });
+      return;
+    }
     setSaved(DEFAULTS);
     setLiveByView({});
     setActiveViewId(DEFAULT_VIEWS[0].id);
     setDraft(null);
     setEnlargement(null);
-  }, []);
+  }, [source, mutate]);
 
   return {
+    ready: source !== 'loading',
+    source,
+    roles,
+    role,
+    setRole,
+    canEdit,
+    saveErrors,
+    saving,
+    setViewRoles,
     views,
     blocks,
     activeViewId: savedView.id,

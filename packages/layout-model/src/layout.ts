@@ -81,6 +81,11 @@ export interface LayoutView {
   slots: Slot[];
   /** How blocks in this view feed each other (output → input). */
   bindings?: Binding[];
+  /**
+   * Roles that may use this view (served by the layout service). Editors see
+   * every view regardless. Absent in local mode.
+   */
+  roles?: string[];
 }
 
 /**

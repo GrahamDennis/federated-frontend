@@ -10,7 +10,7 @@ import {
   placeSlot,
   resizeGrid,
   resolveSlots,
-} from '../packages/host/src/layout';
+} from '../packages/layout-model/src/layout';
 
 const slot = (page: Page, id: string) => page.locator(`.slot[data-slot="${id}"]`);
 const pane = (page: Page, appId: string) =>

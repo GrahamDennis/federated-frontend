@@ -1,6 +1,6 @@
 import {expect, type Page} from '@playwright/test';
 import {test} from './fixtures';
-import {DEFAULT_VIEWS, resolveInputs, setBinding} from '../packages/host/src/layout';
+import {DEFAULT_VIEWS, resolveInputs, setBinding} from '../packages/layout-model/src/layout';
 
 /**
  * Wiring: blocks declare typed inputs/outputs; a view binds outputs to inputs

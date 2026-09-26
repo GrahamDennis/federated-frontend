@@ -1,7 +1,7 @@
 import {expect, type Page} from '@playwright/test';
 import {test} from './fixtures';
 import {inputsAuthorize} from '../packages/host/src/commands';
-import {checkExpr, evaluateExpr, type ExprScope} from '../packages/host/src/expressions';
+import {checkExpr, evaluateExpr, type ExprScope} from '../packages/layout-model/src/expressions';
 
 const scope: ExprScope = [
   {name: 'actions', blockId: 'actions', outputs: {pressed: 'any', pressedLabel: 'string'}},

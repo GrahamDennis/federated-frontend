@@ -47,6 +47,11 @@ packages/
   plugin-actions/   :5178  An action-button block: the layout author supplies its
                     buttons (a CEL list); each publishes a value and/or runs
                     another block's command (authority comes from the wiring).
+  layout-model/            The layout model shared by host and service: views,
+                    blocks, wiring, CEL expressions and validation (pure TS).
+  layout-service/   :5181  Serves saved layouts per workspace and role, lets
+                    only editor roles save, and validates every save (CEL type
+                    checks, wiring, geometry) with the shared model.
   plugin-registry/  :5180  Plugin distribution + discovery. Packages plugins as
                     ORAS-style OCI artifacts and serves them: a dumb
                     content-addressed endpoint (/content/<repo>@<digest>/) plus a
@@ -191,7 +196,9 @@ non-overlapping **slots**, and each slot shows one app:
 - **Edit mode** (✎ Edit layouts). Set the grid size, drag slots to move them,
   drag the corner handle to resize, click `+` on an empty cell to add a slot, set
   each slot's default app, and create, duplicate, rename, or delete views. Saved
-  views persist in localStorage.
+  views are served by the **layout service** per workspace and role (only
+  editor roles can edit, and every save is validated server-side). If the
+  service is unreachable, they're kept in localStorage instead.
 
 A slot shows a **block**: a configured instance of an app. The same plugin can
 run several times side by side, each instance with its own iframe, thread,
@@ -257,7 +264,7 @@ ages out by TTL / LRU size cap.
 
 ```bash
 npm install
-npm run dev       # host (:5173), plugin registry (:5180), and the 5 plugins (:5174–:5178)
+npm run dev       # host (:5173), plugin registry (:5180), layout service (:5181), and the 5 plugins (:5174–:5178)
 # open http://localhost:5173
 npm run typecheck
 npm test          # Playwright e2e (boots all the dev servers automatically)
@@ -324,6 +331,11 @@ exercising the cross-origin channels rather than mocking them:
   (pure); in the Quick actions view: a value button driving every wired block,
   a command button running the detail map's command, and authoring (command
   chips, and a command that can't run being reported).
+- `tests/layout-service.spec.ts` — the service API (per-role views, editing
+  restricted to editor roles, isolated workspaces, and server-side validation
+  of CEL types, wiring and geometry) and the host against it (switching role,
+  choosing which roles see a view, a rejected save keeping the draft open, and
+  falling back to local storage when the service is unreachable).
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.
