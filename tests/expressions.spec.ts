@@ -1,105 +1,94 @@
 import {expect, type Page} from '@playwright/test';
 import {test} from './fixtures';
 import {
-  ExprError,
-  evaluate,
-  evaluateSource,
-  inferType,
-  parseExpr,
-  refsOf,
+  checkExpr,
+  evaluateExpr,
+  referencedOutputs,
+  toIdentifier,
+  type ExprScope,
 } from '../packages/host/src/expressions';
-import {bindingSources, DEFAULT_VIEWS, resolveInputs} from '../packages/host/src/layout';
+import {DEFAULT_VIEWS, resolveInputs} from '../packages/host/src/layout';
 
-const tokyo = {id: 'tokyo', name: 'Tokyo', latitude: 35.69, longitude: 139.69};
+const tokyo = {id: 'tokyo', name: 'Tokyo', latitude: 35.69, longitude: 139.69, zoom: 9};
 const osaka = {id: 'osaka', name: 'Osaka', latitude: 34.69, longitude: 135.5};
+
+const scope: ExprScope = [
+  {name: 'histogram', blockId: 'histogram', outputs: {selection: 'place', range: 'range'}},
+  {name: 'nearby', blockId: 'histogram~nearby', outputs: {selection: 'place', range: 'range'}},
+  {name: 'overview', blockId: 'world-map~overview', outputs: {selection: 'place', viewport: 'bbox'}},
+];
 const outputs: Record<string, Record<string, unknown>> = {
   histogram: {selection: tokyo},
-  'world-map~overview': {viewport: {west: 100, south: 0, east: 150, north: 50}},
+  'world-map~overview': {selection: osaka, viewport: {west: 100, south: 0, east: 150, north: 50}},
 };
 const outputOf = (b: string, o: string) => (outputs[b]?.[o] ?? undefined) as never;
-const run = (src: string) => evaluate(parseExpr(src), outputOf);
+const run = (src: string) => evaluateExpr(src, scope, outputOf);
 
-test.describe('expression language (pure)', () => {
-  test('parses references with block ids containing ~ and -', () => {
-    expect(parseExpr('world-map~overview.viewport.west')).toEqual({
-      kind: 'ref',
-      blockId: 'world-map~overview',
-      output: 'viewport',
-      path: ['west'],
-    });
-    expect(run('world-map~overview.viewport.west')).toBe(100);
+test.describe('CEL expressions (pure)', () => {
+  test('block outputs are typed variables; results come back as plain JSON', () => {
+    expect(run('overview.viewport.west')).toBe(100);
+    expect(run('histogram.selection')).toEqual(tokyo);
+    expect(run('histogram.selection.name + "!"')).toBe('Tokyo!');
+    expect(run('1 + 2')).toBe(3); // CEL int (bigint) → number
+    expect(run('overview.viewport.north > 40.0 ? "north" : "south"')).toBe('north');
   });
 
-  test('literals, arithmetic and logic', () => {
-    expect(run('add(1, 2, 3)')).toBe(6);
-    expect(run('sub(10, -2.5)')).toBe(12.5);
-    expect(run('div(1, 0)')).toBeNull();
-    expect(run("if(gt(3, 2), 'yes', 'no')")).toBe('yes');
-    expect(run('and(true, not(false))')).toBe(true);
-    expect(run('round(3.14159, 2)')).toBe(3.14);
+  test('unpublished outputs are absent: has() and optional chaining handle them', () => {
+    expect(run('has(nearby.selection)')).toBe(false);
+    expect(run('nearby.?selection.orValue(histogram.selection)')).toEqual(tokyo);
+    // Reading an absent output is an error, which makes the input null.
+    expect(run('bboxAround(nearby.selection, 100)')).toBeNull();
   });
 
-  test('null propagates, except through null-aware functions', () => {
-    expect(run('add(missing.value, 1)')).toBeNull();
-    expect(run('coalesce(missing.value, histogram.selection.name)')).toBe('Tokyo');
-    expect(run('isNull(missing.value)')).toBe(true);
-  });
-
-  test('geography helpers', () => {
+  test('custom geo functions', () => {
     const box = run('bboxAround(histogram.selection, 1500)') as any;
-    // ~13.5° of latitude either side for 1,500 km.
     expect(box.north - box.south).toBeCloseTo((2 * 1500) / 111.32, 3);
-    expect(box.west).toBeLessThan(tokyo.longitude);
-    const km = evaluate(parseExpr('distanceKm(a.p, b.p)'), (b) =>
-      (b === 'a' ? tokyo : osaka) as never,
-    ) as unknown as number;
+    expect(run('bboxAround(histogram.selection, 1500.0)')).toEqual(box);
+    const km = run('distanceKm(histogram.selection, overview.selection)') as number;
     expect(km).toBeGreaterThan(380);
     expect(km).toBeLessThan(420);
-    expect(run('intersect(bbox(0, 0, 10, 10), bbox(20, 20, 30, 30))')).toBeNull();
-    expect(run('center(bbox(0, 0, 10, 20))')).toMatchObject({latitude: 10, longitude: 5});
+    // No overlap → error → null.
+    expect(run('intersect(bbox(0.0, 0.0, 10.0, 10.0), bbox(20.0, 20.0, 30.0, 30.0))')).toBeNull();
+    expect(run('center(bbox(0.0, 0.0, 10.0, 20.0))')).toMatchObject({latitude: 10, longitude: 5});
   });
 
-  test('parse errors are positioned and descriptive', () => {
+  test('static checking: syntax, unknown names, overloads and the expected type', () => {
+    expect(checkExpr('bboxAround(histogram.selection, 1500)', scope, 'bbox')).toEqual({
+      ok: true,
+      type: 'BBox',
+    });
+    expect(checkExpr('nearby.?selection.orValue(histogram.selection)', scope, 'place')).toEqual({
+      ok: true,
+      type: 'Place',
+    });
     const cases: [string, RegExp][] = [
-      ['bboxAround(histogram.selection', /Expected '\)'/],
-      ['nope(1)', /Unknown function 'nope'/],
-      ['bboxAround(1)', /takes 2 arguments/],
-      ['histogram', /refer to an output as block.output/],
-      ['1 2', /Unexpected input/],
+      ['bboxAround(histogram.selection', /Expected RPAREN/],
+      ['bboxAround(missing.selection, 1)', /Unknown variable: missing/],
+      ['bboxAround(histogram, 1)', /no matching overload/],
+      ['histogram.selection', /Returns Place, but this input expects BBox/],
     ];
     for (const [src, message] of cases) {
-      let error: unknown;
-      try {
-        parseExpr(src);
-      } catch (e) {
-        error = e;
-      }
-      expect(error, src).toBeInstanceOf(ExprError);
-      expect((error as ExprError).message, src).toMatch(message);
+      const result = checkExpr(src, scope, 'bbox');
+      expect(result.ok, src).toBe(false);
+      expect((result as {message: string}).message, src).toMatch(message);
     }
-    expect(evaluateSource('broken(', outputOf)).toBeNull();
   });
 
-  test('type inference', () => {
-    const portType = (b: string, o: string) =>
-      ({'histogram.selection': 'place', 'm.viewport': 'bbox'})[`${b}.${o}`];
-    const type = (src: string) => inferType(parseExpr(src), portType);
-    expect(type('bboxAround(histogram.selection, 5)')).toBe('bbox');
-    expect(type('coalesce(x.y, histogram.selection)')).toBe('place');
-    expect(type('distanceKm(histogram.selection, histogram.selection)')).toBe('number');
-    expect(type('histogram.selection.name')).toBe('any');
-  });
-
-  test('bindings resolve through expressions and report what they read', () => {
-    const nearby = DEFAULT_VIEWS.find((v) => v.id === 'nearby')!;
-    const inputs = resolveInputs(nearby, 'places', outputOf);
-    expect(inputs.place).toEqual(tokyo);
-    const binding = nearby.bindings!.find((b) => b.blockId === 'places')!;
-    expect(bindingSources(binding).map((s) => s.blockId)).toEqual([
-      'histogram~nearby',
-      'histogram',
+  test('references and identifiers', () => {
+    expect(referencedOutputs('nearby.?selection.orValue(histogram.selection)')).toEqual([
+      {name: 'nearby', output: 'selection'},
+      {name: 'histogram', output: 'selection'},
     ]);
-    expect(refsOf(parseExpr('add(a.x, b.y)'))).toHaveLength(2);
+    expect(toIdentifier('world-map~2')).toBe('world_map_2');
+    expect(toIdentifier('in')).toBe('in_');
+  });
+
+  test('bindings resolve through expressions', () => {
+    const nearbyView = DEFAULT_VIEWS.find((v) => v.id === 'nearby')!;
+    expect(resolveInputs(nearbyView, 'places', outputOf, scope)).toEqual({place: tokyo});
+    expect(resolveInputs(nearbyView, 'histogram~nearby', outputOf, scope).viewport).toMatchObject({
+      west: expect.any(Number),
+    });
   });
 });
 
@@ -123,31 +112,31 @@ test.describe('derived expressions (Nearby view)', () => {
     await expect(list).toContainText('Osaka');
     await expect(list).toContainText('Seoul');
     await expect(list).not.toContainText('London');
-    // coalesce(): nothing picked nearby yet, so Places falls back to the main pick…
+    // orValue(): nothing picked nearby yet, so Places falls back to the main pick…
     await expect(frame(page, 'places').locator('.place-detail h2')).toHaveText('Tokyo');
     // …and follows the nearby pick once there is one.
     await list.getByRole('button', {name: /^Osaka/}).click();
     await expect(frame(page, 'places').locator('.place-detail h2')).toHaveText('Osaka');
   });
 
-  test('editing an expression: errors, inferred type, and the result live', async ({page}) => {
+  test('editing an expression: errors, inferred type, and the result', async ({page}) => {
     await page.getByRole('button', {name: /Edit layouts/}).click();
     await page.getByLabel('Settings for slot s3').click();
+    const panel = page.getByRole('complementary', {name: 'Block settings'});
+    await expect(panel.locator('.block-name')).toHaveText('nearby');
     const editor = page.getByLabel('Expression for Filter to area');
     await expect(editor).toHaveValue('bboxAround(histogram.selection, 1500)');
-    const status = page.getByRole('complementary', {name: 'Block settings'}).getByRole('status');
-    await expect(status).toContainText('→ bbox');
+    const status = panel.getByRole('status');
+    await expect(status).toContainText('→ BBox');
 
     await editor.fill('bboxAround(histogram.selection');
-    await expect(status).toContainText("Expected ')'");
+    await expect(status).toContainText('Expected RPAREN');
 
     await editor.fill('histogram.selection');
-    await expect(status).toContainText('input expects bbox');
+    await expect(status).toContainText('Returns Place, but this input expects BBox');
 
-    // A tighter radius, applied live to the running histogram (no Save needed
-    // to preview; Save persists it).
     await editor.fill('bboxAround(histogram.selection, 500)');
-    await expect(status).toContainText('→ bbox');
+    await expect(status).toContainText('→ BBox');
     await page.getByRole('button', {name: 'Save view'}).click();
     await frame(page, 'histogram').getByRole('button', {name: /^Tokyo/}).click();
     const list = frame(page, 'histogram~nearby').getByRole('list', {name: 'Matching cities'});
@@ -159,19 +148,16 @@ test.describe('derived expressions (Nearby view)', () => {
     await page.goto('/?mode=layout&view=explorer');
     await page.getByRole('button', {name: /Edit layouts/}).click();
     await page.getByLabel('Settings for slot s4').click();
-    await page.getByLabel('Input Place to show').selectOption({label: 'ƒ Expression…'});
-    // Seeded from the direct source it replaces.
-    await expect(page.getByLabel('Expression for Place to show')).toHaveValue(
-      'histogram.selection',
-    );
+    await page.getByLabel('Input Place to show').selectOption({label: 'ƒ Expression (CEL)…'});
+    // Seeded from the direct source it replaces, using the block's CEL name.
+    const editor = page.getByLabel('Expression for Place to show');
+    await expect(editor).toHaveValue('histogram.selection');
     await expect(page.locator('.slot-edit-wire', {hasText: 'place ='})).toContainText(
       'histogram.selection',
     );
     // Clicking an available output inserts a reference.
-    await page.getByLabel('Expression for Place to show').fill('coalesce(');
-    await page.getByRole('button', {name: 'world-map~overview.selection'}).click();
-    await expect(page.getByLabel('Expression for Place to show')).toHaveValue(
-      'coalesce(world-map~overview.selection',
-    );
+    await editor.fill('overview.?selection.orValue(');
+    await page.getByRole('button', {name: 'histogram.selection'}).click();
+    await expect(editor).toHaveValue('overview.?selection.orValue(histogram.selection');
   });
 });

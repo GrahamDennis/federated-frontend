@@ -1,8 +1,9 @@
 # Layouts: slot grids, predefined views, and the road to an app builder
 
 Status: prototype implemented in the host (`packages/host/src/layout.ts`,
-`useLayouts.ts`, `LayoutStage.tsx`, `instances.ts`, `instanceFeed.ts`); tests in
-`tests/layout.spec.ts`, `tests/blocks.spec.ts` and `tests/wiring.spec.ts`.
+`useLayouts.ts`, `LayoutStage.tsx`, `instances.ts`, `instanceFeed.ts`,
+`expressions.ts`); tests in `tests/layout.spec.ts`, `tests/blocks.spec.ts`,
+`tests/wiring.spec.ts` and `tests/expressions.spec.ts`.
 
 ## Why slots and not windows
 
@@ -164,6 +165,75 @@ round trips, so an update landing in between would be lost. The host therefore
 sends the current value as soon as a plugin subscribes. This applies to
 settings, inputs and the shared context.
 
+## Derived expressions (CEL)
+
+An input can be bound to an **expression** over block outputs instead of a
+single output. Expressions are written in [CEL](https://cel.dev), the Common
+Expression Language, and evaluated by
+[`@marcbachmann/cel-js`](https://github.com/marcbachmann/cel-js):
+
+```
+bboxAround(histogram.selection, 1500)              // a computed viewport
+nearby.?selection.orValue(histogram.selection)     // first available pick
+has(overview.selection) ? overview.selection : detail.selection
+```
+
+**Why CEL rather than a custom language:**
+
+- It's designed for exactly this: side-effect free, non-Turing-complete,
+  guaranteed to terminate, and fast.
+- It's statically typed, which suits typed ports.
+- It's widely used for user-authored rules (Kubernetes, Envoy, Firebase).
+- It has implementations in Go, Java and C++, so a server could validate or
+  evaluate the same bindings later.
+
+**Why this implementation:** `@marcbachmann/cel-js` has no dependencies and
+supports custom types from plain field schemas, typed custom functions,
+optional chaining and static `check()`. The alternative, `@bufbuild/cel`,
+models custom types as protobuf messages and pulls in protobuf and RE2. The
+package claims "most of the CEL spec", not full conformance.
+
+**How it maps:**
+
+- **Blocks are variables.** Each block has a short CEL **name**: `overview`,
+  `detail`, `nearby`, and for default blocks the app id made identifier-safe
+  (`world_map`, `histogram`). The block panel shows it. A block's fields are
+  its declared outputs.
+- **Port types map to CEL types.** `place` → `Place`, `bbox` → `BBox`,
+  `range` → `Range`, `number` → `double`, `string`, `boolean` → `bool`, and
+  anything else → `dyn`. `Place`, `BBox` and `Range` are registered CEL types
+  with typed fields, so `histogram.selection.latitude` type-checks as a
+  `double`.
+- **Custom functions:** `bboxAround`, `distanceKm`, `intersect`, `union`,
+  `center`, `place`, `bbox`, `range` and `inRange`. Distance and number
+  arguments have `int` overloads, so `1500` works as well as `1500.0`.
+  Otherwise CEL's numeric rules are strict (`double - int` is a type error).
+- **Unpublished outputs are absent, not null.** Use `has(x.out)` or optional
+  chaining `x.?out.orValue(…)`. Any evaluation error, such as reading an absent
+  output, makes the input `null`, which gives "not available yet" behaviour
+  without special cases.
+- **Results come back as plain JSON.** `bigint` becomes a number, and CEL
+  values become plain objects, so they cross the iframe boundary as data.
+- **Bindings record their language.** A binding is stored as
+  `{expr, lang: 'cel'}`, so the format can change later.
+
+**Editor:** each input's drop-down has "ƒ Expression (CEL)…", which opens a
+text box with:
+
+- live parse and type errors, including a result type that doesn't match the
+  input (e.g. "Returns Place, but this input expects BBox");
+- the inferred type;
+- clickable `name.output` references to other blocks' outputs;
+- a list of the custom functions and the main CEL idioms.
+
+Switching from a direct source seeds the expression with the equivalent
+reference.
+
+The **"Nearby (derived)"** default view shows this. A second histogram
+instance's viewport is `bboxAround(histogram.selection, 1500)`, so it lists the
+cities within 1,500 km of whatever you pick in the first. Places shows
+`nearby.?selection.orValue(histogram.selection)`.
+
 ## Towards an "app builder"
 
 An app builder is the same slot model with a palette of **blocks** (map,
@@ -178,16 +248,11 @@ Done:
    renders a form for it, and plugins receive the values live.
 3. **Typed wiring.** Blocks declare inputs and outputs, views bind them, and the
    host routes values (see "Wiring blocks together" above).
+4. **Derived expressions.** A binding can be a CEL expression over block
+   outputs (see "Derived expressions (CEL)" above).
 
 Still to do:
 
-4. **Derived expressions.** Let a binding be an expression over outputs instead
-   of a plain reference, e.g. `buffer(map.selection, 50km)` or
-   `intersect(a.viewport, b.viewport)`. Use a small, sandboxed, pure language
-   (a JSON-logic-style AST or a restricted expression parser), not arbitrary
-   JS. Evaluate it in the host, or in a worker (see `shared-datamodel.md`). It
-   plugs into `resolveInputs`: a binding's source becomes an expression tree
-   whose leaves are block outputs.
 5. **Action blocks.** Buttons that invoke another block's exported command (the
    ⌘K command registry already proxies callbacks across iframes) or write to a
    channel.
@@ -211,5 +276,14 @@ Still to do:
 - Wiring has no cycle detection. A cycle would only loop if plugins republish
   on every input change, and none of the examples do.
 - The editor offers only blocks placed in the current view as input sources.
+  Expressions can reference any known block by name.
+- Block names are assigned once and can't be renamed in the UI, because
+  expressions refer to them. Renaming would need to rewrite those expressions,
+  for example via the AST.
+- Deleting a block removes direct wires from it. An expression that mentions it
+  is kept and shows an "Unknown variable" error until it's fixed.
+- Expressions are evaluated on the main thread, on every render that resolves
+  inputs (parsed expressions are cached). A worker would only matter for heavy
+  expressions.
 - The settings schema is deliberately tiny, with no validation beyond the input
   types. It should map onto JSON Schema if it grows.

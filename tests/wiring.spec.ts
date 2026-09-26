@@ -109,7 +109,7 @@ test.describe('wired explorer view', () => {
       'Overview map · Selected city',
       'City histogram · Picked city',
       'Detail map · Selected city',
-      'ƒ Expression…',
+      'ƒ Expression (CEL)…',
     ]);
     await input.selectOption({label: 'Overview map · Selected city'});
     await expect(page.locator('.slot-edit-wire', {hasText: 'place ←'})).toContainText(

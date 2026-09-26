@@ -25,7 +25,7 @@ import {gridArea, resolveInputs, type Rect} from './layout';
 import {useInstanceFeed} from './instanceFeed';
 import {LayoutBar, SlotLayer, gridTemplate} from './LayoutStage';
 import {useLayouts} from './useLayouts';
-import {instanceFor, type Instance} from './instances';
+import {exprScope, instanceFor, type Instance} from './instances';
 
 /**
  * The host chrome's shared services. Plugin hosts get at these (via {@link useChrome})
@@ -269,9 +269,15 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     [],
   );
   const wiringView = layoutMode ? layouts.view : null;
+  const scope = useMemo(() => exprScope(layouts.blocks, apps), [layouts.blocks, apps]);
   const inputsFeed = useInstanceFeed<BlockInputs>(mountedIds, (id) =>
     wiringView
-      ? resolveInputs(wiringView, id, (blockId, output) => outputsRef.current.get(blockId)?.[output])
+      ? resolveInputs(
+          wiringView,
+          id,
+          (blockId, output) => outputsRef.current.get(blockId)?.[output],
+          scope,
+        )
       : {},
   );
 

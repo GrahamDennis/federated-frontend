@@ -10,7 +10,6 @@ import {
   newBlockId,
   rectOf,
   resolveSlots,
-  bindingSources,
   setBinding,
   type BindingSource,
   type Block,
@@ -47,7 +46,13 @@ function withNewDefaults(stored: Stored): Stored {
   );
   return {
     views: [...stored.views, ...added],
-    blocks: {...DEFAULT_BLOCKS, ...stored.blocks},
+    // Per block, so defaults gain fields added later (e.g. `name`).
+    blocks: Object.fromEntries(
+      [...new Set([...Object.keys(DEFAULT_BLOCKS), ...Object.keys(stored.blocks)])].map((id) => [
+        id,
+        {...DEFAULT_BLOCKS[id], ...stored.blocks[id]},
+      ]),
+    ),
     seenDefaults: DEFAULT_VIEWS.map((v) => v.id),
   };
 }
@@ -246,9 +251,9 @@ export function useLayouts(initialViewId: string | null) {
             ...d.view,
             slots: d.view.slots.map((s) => (s.blockId === blockId ? {...s, blockId: null} : s)),
             bindings: (d.view.bindings ?? []).filter(
-              (b) =>
-                b.blockId !== blockId &&
-                !bindingSources(b).some((source) => source.blockId === blockId),
+              // Direct wires from it go; an expression that mentions it stays and
+              // shows an "unknown variable" error in the editor until fixed.
+              (b) => b.blockId !== blockId && b.from?.blockId !== blockId,
             ),
           },
         };

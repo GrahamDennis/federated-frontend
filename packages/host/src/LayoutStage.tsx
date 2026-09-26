@@ -1,15 +1,8 @@
 import {useRef, useState} from 'preact/hooks';
 import type {PortDescriptor, SettingDescriptor, SettingValue} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
-import {instanceFor, knownInstances, type Instance} from './instances';
-import {
-  ExprError,
-  FUNCTIONS,
-  inferType,
-  parseCached,
-  type Expr,
-  type PortTypeLookup,
-} from './expressions';
+import {exprScope, instanceFor, knownInstances, type Instance} from './instances';
+import {FUNCTIONS, IDIOMS, checkExpr, type ExprScope} from './expressions';
 import {
   MAX_GRID,
   addSlot,
@@ -522,6 +515,7 @@ function BlockSettingsPanel({
     layouts.updateBlock(instance.block, {settings: {[key]: value}});
   const explicit = instance.id !== instance.app.id && instance.id in layouts.blocks;
   const usedIn = explicit ? layouts.viewsUsingBlock(instance.id) : [];
+  const scope = exprScope(layouts.blocks, apps);
   // Other blocks placed in this view, as candidate sources for inputs.
   const sources = layouts.view.slots
     .map((slot) => slot.blockId)
@@ -538,6 +532,11 @@ function BlockSettingsPanel({
       </header>
       <p className="block-settings-meta">
         {instance.app.name} · <code>{instance.id}</code>
+        {instance.app.outputs && (
+          <>
+            {' '}· in expressions: <code className="block-name">{instance.name}</code>
+          </>
+        )}
       </p>
       <label className="block-field">
         <span>Block name</span>
@@ -566,9 +565,7 @@ function BlockSettingsPanel({
               input={input}
               port={port}
               sources={sources}
-              portType={(id, output) =>
-                instanceFor(layouts.blocks, id, apps)?.app.outputs?.[output]?.type
-              }
+              scope={scope}
             />
           ))}
         </section>
@@ -608,7 +605,7 @@ const EXPRESSION = '\u0001expr';
 
 /**
  * Connect one input: to a type-compatible output of another block in the view
- * (the option value encodes `blockId␀output`), or to a derived expression.
+ * (the option value encodes `blockId␀output`), or to a CEL expression.
  */
 function InputField({
   layouts,
@@ -616,14 +613,14 @@ function InputField({
   input,
   port,
   sources,
-  portType,
+  scope,
 }: {
   layouts: Layouts;
   blockId: string;
   input: string;
   port: PortDescriptor;
   sources: Instance[];
-  portType: PortTypeLookup;
+  scope: ExprScope;
 }) {
   const bound = bindingFor(layouts.view, blockId, input);
   const isExpr = bound?.expr !== undefined;
@@ -640,6 +637,8 @@ function InputField({
     : bound?.from
       ? `${bound.from.blockId}${SEP}${bound.from.output}`
       : '';
+  const setExpr = (expr: string) =>
+    layouts.setInputBinding(blockId, input, {expr, lang: 'cel'});
   return (
     <div className="block-field">
       <label className="block-field">
@@ -653,8 +652,9 @@ function InputField({
             const value = e.currentTarget.value;
             if (value === EXPRESSION) {
               // Seed the expression with the current direct source, if any.
-              const seed = bound?.from ? `${bound.from.blockId}.${bound.from.output}` : '';
-              layouts.setInputBinding(blockId, input, {expr: seed});
+              const from = bound?.from;
+              const name = from && scope.find((b) => b.blockId === from.blockId)?.name;
+              setExpr(from && name ? `${name}.${from.output}` : '');
               return;
             }
             const [fromBlock, output] = value.split(SEP);
@@ -671,7 +671,7 @@ function InputField({
               {o.label}
             </option>
           ))}
-          <option value={EXPRESSION}>ƒ Expression…</option>
+          <option value={EXPRESSION}>ƒ Expression (CEL)…</option>
         </select>
       </label>
       {isExpr && (
@@ -680,8 +680,8 @@ function InputField({
           label={port.label}
           expected={port.type}
           sources={sources}
-          portType={portType}
-          onChange={(expr) => layouts.setInputBinding(blockId, input, {expr})}
+          scope={scope}
+          onChange={setExpr}
         />
       )}
       {port.description && <small>{port.description}</small>}
@@ -690,30 +690,27 @@ function InputField({
 }
 
 /**
- * Text editor for a derived expression: live parse errors, the inferred result
- * type (with a warning if it doesn't match the input's type), and clickable
- * references to the outputs of other blocks in the view.
+ * Text editor for a CEL expression: live parse/type errors (including a result
+ * type that doesn't match the input), the inferred type, clickable references
+ * to other blocks' outputs, and the available functions.
  */
 function ExpressionEditor({
   value,
   label,
   expected,
   sources,
-  portType,
+  scope,
   onChange,
 }: {
   value: string;
   label: string;
   expected: string;
   sources: Instance[];
-  portType: PortTypeLookup;
+  scope: ExprScope;
   onChange(expr: string): void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
-  const parsed = value.trim() ? parseCached(value) : null;
-  const error = parsed instanceof ExprError ? parsed : null;
-  const type = parsed && !error ? inferType(parsed as Expr, portType) : null;
-  const mismatch = type && type !== 'any' && type !== expected;
+  const check = value.trim() ? checkExpr(value, scope, expected) : null;
 
   function insert(text: string) {
     const el = ref.current;
@@ -728,23 +725,23 @@ function ExpressionEditor({
         ref={ref}
         aria-label={`Expression for ${label}`}
         spellcheck={false}
-        rows={2}
+        rows={3}
         value={value}
         placeholder="e.g. bboxAround(histogram.selection, 1500)"
         onInput={(e) => onChange(e.currentTarget.value)}
       />
       <div className="expr-status" role="status">
-        {error ? (
-          <span className="expr-error">
-            ✕ {error.message} (at {error.position + 1})
-          </span>
-        ) : type ? (
-          <span className={mismatch ? 'expr-warn' : 'expr-ok'}>
-            {mismatch ? '⚠' : '✓'} → <code>{type}</code>
-            {mismatch && ` (input expects ${expected})`}
+        {!check ? (
+          <span className="expr-hint">Empty — evaluates to null</span>
+        ) : check.ok ? (
+          <span className="expr-ok">
+            ✓ → <code>{check.type}</code>
           </span>
         ) : (
-          <span className="expr-hint">Empty — evaluates to null</span>
+          <span className="expr-error">
+            ✕ {check.message}
+            {check.start !== undefined && ` (at ${check.start + 1})`}
+          </span>
         )}
       </div>
       <div className="expr-refs" aria-label="Available outputs">
@@ -755,19 +752,24 @@ function ExpressionEditor({
               type="button"
               className="expr-ref"
               title={`${source.label} · ${out.label} (${out.type})`}
-              onClick={() => insert(`${source.id}.${output}`)}
+              onClick={() => insert(`${source.name}.${output}`)}
             >
-              {source.id}.{output}
+              {source.name}.{output}
             </button>
           )),
         )}
       </div>
       <details className="expr-help">
-        <summary>Functions</summary>
+        <summary>CEL functions &amp; idioms</summary>
         <ul>
-          {Object.entries(FUNCTIONS).map(([name, fn]) => (
-            <li key={name}>
-              <code>{name}</code> — {fn.doc}
+          {FUNCTIONS.filter((fn) => fn.doc).map((fn) => (
+            <li key={fn.signature}>
+              <code>{fn.signature}</code> — {fn.doc}
+            </li>
+          ))}
+          {IDIOMS.map((idiom) => (
+            <li key={idiom.example}>
+              <code>{idiom.example}</code> — {idiom.doc}
             </li>
           ))}
         </ul>

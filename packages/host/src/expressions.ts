@@ -1,73 +1,74 @@
-import type {BBox, NumberRange, PortValue, SelectedPlace} from '@ff/protocol';
+import {Environment, type ASTNode, type ParseResult} from '@marcbachmann/cel-js';
+import type {BBox, NumberRange, PortType, PortValue, SelectedPlace} from '@ff/protocol';
 
 /**
- * Derived expressions: a tiny, pure, host-evaluated language for computing a
- * block input from other blocks' outputs — e.g.
+ * Derived expressions, in CEL (the Common Expression Language — cel.dev), via
+ * `@marcbachmann/cel-js`. CEL is non-Turing-complete, side-effect free and
+ * statically typed, and has implementations in Go/Java/C++ as well as JS, so a
+ * server could validate or evaluate the same bindings later.
+ *
+ * Each block in scope is a CEL variable, named by the block's short name, whose
+ * fields are its declared outputs, typed from the port types:
  *
  *   bboxAround(histogram.selection, 1500)
- *   coalesce(histogram~nearby.selection, histogram.selection)
- *   if(gt(distanceKm(a.selection, b.selection), 1000), a.selection, null)
+ *   nearby.?selection.orValue(histogram.selection)
+ *   has(overview.selection) ? overview.selection : detail.selection
  *
- * Deliberately not JavaScript: there are no operators, variables, loops or
- * access to anything but block outputs and a fixed set of functions, so an
- * expression authored in the editor can't do anything but compute a value. It's
- * call syntax only (`fn(a, b)`), which also lets block ids like
- * `world-map~overview` appear bare in references (`block.output.field…`).
- *
- * Null propagates: most functions return null if any argument is null (a
- * source that hasn't published yet), except the null-aware ones (`coalesce`,
- * `if`, `isNull`, `and`, `or`).
+ * Outputs that haven't been published yet are *absent* (not null) — use CEL's
+ * `has(x.out)` or optional chaining `x.?out.orValue(…)` to handle them. Any
+ * evaluation error (e.g. reading an absent output) makes the input null, which
+ * gives the "not available yet" behaviour without special cases.
  */
 
-export type Expr =
-  | {kind: 'lit'; value: PortValue | null}
-  | {kind: 'ref'; blockId: string; output: string; path: string[]}
-  | {kind: 'call'; fn: string; args: Expr[]};
+// ---- Types: port types ⇄ CEL types ----
 
-/** Value types for inference. Port types are open strings; `any` = unknown. */
-export type ValueType = 'number' | 'string' | 'boolean' | 'place' | 'bbox' | 'range' | 'any' | (string & {});
-
-export class ExprError extends Error {
-  constructor(
-    message: string,
-    readonly position: number,
-  ) {
-    super(message);
+class Place {
+  constructor(value: SelectedPlace) {
+    Object.assign(this, value);
   }
+}
+class BBoxValue {
+  constructor(value: BBox) {
+    Object.assign(this, value);
+  }
+}
+class RangeValue {
+  constructor(value: NumberRange) {
+    Object.assign(this, value);
+  }
+}
+
+const CEL_TYPES: Record<string, string> = {
+  place: 'Place',
+  bbox: 'BBox',
+  range: 'Range',
+  number: 'double',
+  string: 'string',
+  boolean: 'bool',
+};
+
+/** The CEL type used for a port type (`dyn` when there's no mapping). */
+export function celTypeOf(portType: PortType): string {
+  return CEL_TYPES[portType] ?? 'dyn';
 }
 
 // ---- Functions ----
 
-type Value = PortValue | null;
-
-interface FnSpec {
-  /** [min, max] argument count (max = Infinity for variadic). */
-  arity: [number, number];
-  /** Receives nulls as-is instead of short-circuiting to null. */
-  nullAware?: boolean;
-  /** Result type from argument types. */
-  type: (args: ValueType[]) => ValueType;
-  call: (...args: any[]) => Value;
-  doc: string;
-}
-
-const num = (): ValueType => 'number';
-const bool = (): ValueType => 'boolean';
-
 const KM_PER_DEG = 111.32;
+type P = SelectedPlace;
 
-function bboxAround(place: SelectedPlace, km: number): BBox {
+function bboxAround(p: P, km: number): BBoxValue {
   const dLat = km / KM_PER_DEG;
-  const dLon = km / (KM_PER_DEG * Math.max(0.01, Math.cos((place.latitude * Math.PI) / 180)));
-  return {
-    west: place.longitude - dLon,
-    east: place.longitude + dLon,
-    south: Math.max(-90, place.latitude - dLat),
-    north: Math.min(90, place.latitude + dLat),
-  };
+  const dLon = km / (KM_PER_DEG * Math.max(0.01, Math.cos((p.latitude * Math.PI) / 180)));
+  return new BBoxValue({
+    west: p.longitude - dLon,
+    east: p.longitude + dLon,
+    south: Math.max(-90, p.latitude - dLat),
+    north: Math.min(90, p.latitude + dLat),
+  });
 }
 
-function distanceKm(a: SelectedPlace, b: SelectedPlace): number {
+function distanceKm(a: P, b: P): number {
   const rad = Math.PI / 180;
   const dLat = (b.latitude - a.latitude) * rad;
   const dLon = (b.longitude - a.longitude) * rad;
@@ -77,299 +78,257 @@ function distanceKm(a: SelectedPlace, b: SelectedPlace): number {
   return 2 * 6371 * Math.asin(Math.sqrt(h));
 }
 
-export const FUNCTIONS: Record<string, FnSpec> = {
-  // Null handling / logic
-  coalesce: {
-    arity: [1, Infinity],
-    nullAware: true,
-    type: (t) => t.find((x) => x !== 'any') ?? 'any',
-    call: (...xs) => xs.find((x) => x != null) ?? null,
-    doc: 'First argument that isn’t null',
-  },
-  if: {
-    arity: [3, 3],
-    nullAware: true,
-    type: (t) => (t[1] !== 'any' ? t[1] : t[2]),
-    call: (c, a, b) => (c ? a : b),
-    doc: 'if(condition, then, else)',
-  },
-  isNull: {arity: [1, 1], nullAware: true, type: bool, call: (x) => x == null, doc: 'Whether a value is null'},
-  and: {arity: [1, Infinity], nullAware: true, type: bool, call: (...xs) => xs.every(Boolean), doc: 'All truthy'},
-  or: {arity: [1, Infinity], nullAware: true, type: bool, call: (...xs) => xs.some(Boolean), doc: 'Any truthy'},
-  not: {arity: [1, 1], type: bool, call: (x) => !x, doc: 'Logical not'},
-  eq: {arity: [2, 2], type: bool, call: (a, b) => JSON.stringify(a) === JSON.stringify(b), doc: 'Equal'},
-  lt: {arity: [2, 2], type: bool, call: (a, b) => a < b, doc: 'a < b'},
-  gt: {arity: [2, 2], type: bool, call: (a, b) => a > b, doc: 'a > b'},
-
-  // Arithmetic
-  add: {arity: [2, Infinity], type: num, call: (...xs) => xs.reduce((a, b) => a + b), doc: 'Sum'},
-  sub: {arity: [2, 2], type: num, call: (a, b) => a - b, doc: 'a − b'},
-  mul: {arity: [2, Infinity], type: num, call: (...xs) => xs.reduce((a, b) => a * b), doc: 'Product'},
-  div: {arity: [2, 2], type: num, call: (a, b) => (b === 0 ? null : a / b), doc: 'a ÷ b (null if b is 0)'},
-  min: {arity: [1, Infinity], type: num, call: (...xs) => Math.min(...xs), doc: 'Smallest'},
-  max: {arity: [1, Infinity], type: num, call: (...xs) => Math.max(...xs), doc: 'Largest'},
-  round: {
-    arity: [1, 2],
-    type: num,
-    call: (x, digits = 0) => Math.round(x * 10 ** digits) / 10 ** digits,
-    doc: 'round(x, digits?)',
-  },
-
-  // Ranges
-  range: {
-    arity: [2, 2],
-    type: () => 'range',
-    call: (min, max): NumberRange => ({min: Math.min(min, max), max: Math.max(min, max)}),
-    doc: 'range(min, max)',
-  },
-  inRange: {arity: [2, 2], type: bool, call: (x, r: NumberRange) => x >= r.min && x < r.max, doc: 'inRange(x, range)'},
-
-  // Geography
-  place: {
-    arity: [3, 3],
-    type: () => 'place',
-    call: (name: string, latitude: number, longitude: number): SelectedPlace => ({
-      id: String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-      name: String(name),
-      latitude,
-      longitude,
-    }),
-    doc: 'place(name, lat, lon)',
-  },
-  bbox: {
-    arity: [4, 4],
-    type: () => 'bbox',
-    call: (west, south, east, north): BBox => ({west, south, east, north}),
-    doc: 'bbox(west, south, east, north)',
-  },
-  bboxAround: {
-    arity: [2, 2],
-    type: () => 'bbox',
-    call: (p: SelectedPlace, km: number) => bboxAround(p, km),
-    doc: 'Box extending km around a place',
-  },
-  intersect: {
-    arity: [2, 2],
-    type: () => 'bbox',
-    call: (a: BBox, b: BBox): BBox | null => {
+/** Custom functions, with docs for the editor. `int` overloads accept `1500` as well as `1500.0`. */
+export const FUNCTIONS: {signature: string; doc: string; handler: (...args: any[]) => unknown}[] = [
+  {signature: 'bboxAround(Place, double): BBox', doc: 'Box extending km around a place', handler: bboxAround},
+  {signature: 'bboxAround(Place, int): BBox', doc: '', handler: (p, km: bigint) => bboxAround(p, Number(km))},
+  {signature: 'distanceKm(Place, Place): double', doc: 'Great-circle distance', handler: distanceKm},
+  {
+    signature: 'intersect(BBox, BBox): BBox',
+    doc: 'Overlap of two boxes (no value if they don’t overlap)',
+    handler: (a: BBox, b: BBox) => {
       const box = {
         west: Math.max(a.west, b.west),
         east: Math.min(a.east, b.east),
         south: Math.max(a.south, b.south),
         north: Math.min(a.north, b.north),
       };
-      return box.west <= box.east && box.south <= box.north ? box : null;
+      if (box.west > box.east || box.south > box.north) throw new Error('boxes do not overlap');
+      return new BBoxValue(box);
     },
-    doc: 'Overlap of two boxes (null if none)',
   },
-  union: {
-    arity: [2, 2],
-    type: () => 'bbox',
-    call: (a: BBox, b: BBox): BBox => ({
-      west: Math.min(a.west, b.west),
-      east: Math.max(a.east, b.east),
-      south: Math.min(a.south, b.south),
-      north: Math.max(a.north, b.north),
-    }),
+  {
+    signature: 'union(BBox, BBox): BBox',
     doc: 'Box covering both',
+    handler: (a: BBox, b: BBox) =>
+      new BBoxValue({
+        west: Math.min(a.west, b.west),
+        east: Math.max(a.east, b.east),
+        south: Math.min(a.south, b.south),
+        north: Math.max(a.north, b.north),
+      }),
   },
-  center: {
-    arity: [1, 1],
-    type: () => 'place',
-    call: (b: BBox): SelectedPlace => ({
-      id: 'center',
-      name: 'Center',
-      latitude: (b.south + b.north) / 2,
-      longitude: (b.west + b.east) / 2,
-    }),
+  {
+    signature: 'center(BBox): Place',
     doc: 'Centre of a box, as a place',
+    handler: (b: BBox) =>
+      new Place({
+        id: 'center',
+        name: 'Center',
+        latitude: (b.south + b.north) / 2,
+        longitude: (b.west + b.east) / 2,
+      }),
   },
-  distanceKm: {
-    arity: [2, 2],
-    type: num,
-    call: (a: SelectedPlace, b: SelectedPlace) => distanceKm(a, b),
-    doc: 'Great-circle distance between places',
+  {
+    signature: 'place(string, double, double): Place',
+    doc: 'place(name, latitude, longitude)',
+    handler: (name: string, latitude: number, longitude: number) =>
+      new Place({id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), name, latitude, longitude}),
   },
-};
+  {
+    signature: 'bbox(double, double, double, double): BBox',
+    doc: 'bbox(west, south, east, north)',
+    handler: (west, south, east, north) => new BBoxValue({west, south, east, north}),
+  },
+  {
+    signature: 'range(double, double): Range',
+    doc: 'range(min, max)',
+    handler: (a: number, b: number) => new RangeValue({min: Math.min(a, b), max: Math.max(a, b)}),
+  },
+  {
+    signature: 'inRange(double, Range): bool',
+    doc: 'min ≤ x < max',
+    handler: (x: number, r: NumberRange) => x >= r.min && x < r.max,
+  },
+];
 
-// ---- Parsing ----
+/** CEL built-ins worth surfacing in the editor's help. */
+export const IDIOMS: {example: string; doc: string}[] = [
+  {example: 'has(a.selection)', doc: 'Whether an output has been published'},
+  {example: 'a.?selection.orValue(b.selection)', doc: 'First available of two outputs'},
+  {example: 'cond ? x : y', doc: 'Conditional'},
+  {example: 'a.selection.latitude > 30.0', doc: 'Fields & comparisons (doubles need a .0)'},
+];
 
-type Token =
-  | {t: 'num'; v: number; pos: number}
-  | {t: 'str'; v: string; pos: number}
-  | {t: 'id'; v: string; pos: number}
-  | {t: 'punct'; v: '(' | ')' | ',' | '.'; pos: number}
-  | {t: 'end'; pos: number};
-
-const ID_START = /[A-Za-z_]/;
-const ID_CHAR = /[A-Za-z0-9_~-]/;
-
-function tokenize(src: string): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (/\s/.test(c)) {
-      i++;
-    } else if ('(),.'.includes(c)) {
-      tokens.push({t: 'punct', v: c as '(' | ')' | ',' | '.', pos: i++});
-    } else if (/[0-9]/.test(c) || (c === '-' && /[0-9.]/.test(src[i + 1] ?? ''))) {
-      const m = /^-?(\d+\.?\d*|\.\d+)/.exec(src.slice(i))!;
-      tokens.push({t: 'num', v: Number(m[0]), pos: i});
-      i += m[0].length;
-    } else if (c === '"' || c === "'") {
-      const end = src.indexOf(c, i + 1);
-      if (end < 0) throw new ExprError('Unterminated string', i);
-      tokens.push({t: 'str', v: src.slice(i + 1, end), pos: i});
-      i = end + 1;
-    } else if (ID_START.test(c)) {
-      let j = i + 1;
-      while (j < src.length && ID_CHAR.test(src[j])) j++;
-      tokens.push({t: 'id', v: src.slice(i, j), pos: i});
-      i = j;
-    } else {
-      throw new ExprError(`Unexpected '${c}'`, i);
-    }
-  }
-  tokens.push({t: 'end', pos: src.length});
-  return tokens;
+function baseEnvironment(): Environment {
+  const env = new Environment({enableOptionalTypes: true})
+    .registerType('Place', {
+      ctor: Place,
+      fields: {id: 'string', name: 'string', latitude: 'double', longitude: 'double'},
+      convert: (v: SelectedPlace) => (v instanceof Place ? v : new Place(v)),
+    })
+    .registerType('BBox', {
+      ctor: BBoxValue,
+      fields: {west: 'double', south: 'double', east: 'double', north: 'double'},
+      convert: (v: BBox) => (v instanceof BBoxValue ? v : new BBoxValue(v)),
+    })
+    .registerType('Range', {
+      ctor: RangeValue,
+      fields: {min: 'double', max: 'double'},
+      convert: (v: NumberRange) => (v instanceof RangeValue ? v : new RangeValue(v)),
+    });
+  for (const fn of FUNCTIONS) env.registerFunction(fn.signature, fn.handler);
+  return env;
 }
 
-const KEYWORDS: Record<string, PortValue | null> = {true: true, false: false, null: null};
+// ---- Scope: which blocks an expression can see ----
 
-/** Parse an expression, validating function names and argument counts. */
-export function parseExpr(src: string): Expr {
-  const tokens = tokenize(src);
-  let k = 0;
-  const peek = () => tokens[k];
-  const isPunct = (v: string) => {
-    const tok = peek();
-    return tok.t === 'punct' && tok.v === v;
-  };
-  const expect = (v: string) => {
-    if (!isPunct(v)) throw new ExprError(`Expected '${v}'`, peek().pos);
-    k++;
-  };
+/** A block visible to expressions: its CEL name and its typed outputs. */
+export interface ScopeBlock {
+  name: string;
+  blockId: string;
+  outputs: Record<string, PortType>;
+}
+export type ExprScope = ScopeBlock[];
 
-  function expr(): Expr {
-    const tok = peek();
-    if (tok.t === 'num' || tok.t === 'str') {
-      k++;
-      return {kind: 'lit', value: tok.v};
-    }
-    if (tok.t !== 'id') {
-      throw new ExprError(tok.t === 'end' ? 'Unexpected end of expression' : 'Expected a value', tok.pos);
-    }
-    k++;
-    if (isPunct('(')) {
-      const spec = FUNCTIONS[tok.v];
-      if (!spec) throw new ExprError(`Unknown function '${tok.v}'`, tok.pos);
-      k++;
-      const args: Expr[] = [];
-      if (!isPunct(')')) {
-        args.push(expr());
-        while (isPunct(',')) {
-          k++;
-          args.push(expr());
-        }
-      }
-      expect(')');
-      const [lo, hi] = spec.arity;
-      if (args.length < lo || args.length > hi) {
-        const want = lo === hi ? `${lo}` : hi === Infinity ? `at least ${lo}` : `${lo}–${hi}`;
-        throw new ExprError(`${tok.v}() takes ${want} argument${lo === 1 && hi === 1 ? '' : 's'}`, tok.pos);
-      }
-      return {kind: 'call', fn: tok.v, args};
-    }
-    if (isPunct('.')) {
-      const path: string[] = [];
-      while (isPunct('.')) {
-        k++;
-        const part = peek();
-        if (part.t !== 'id') throw new ExprError('Expected a name after "."', part.pos);
-        path.push(part.v);
-        k++;
-      }
-      const [output, ...fields] = path;
-      return {kind: 'ref', blockId: tok.v, output, path: fields};
-    }
-    if (tok.v in KEYWORDS) return {kind: 'lit', value: KEYWORDS[tok.v]};
-    throw new ExprError(`Unknown name '${tok.v}' — refer to an output as block.output`, tok.pos);
-  }
+const RESERVED = new Set(
+  'in as break const continue else for function if import let loop package namespace return var void while true false null has dyn'.split(
+    ' ',
+  ),
+);
 
-  const result = expr();
-  if (peek().t !== 'end') throw new ExprError('Unexpected input after expression', peek().pos);
-  return result;
+/** Turn an arbitrary id into a valid CEL identifier (`world-map~2` → `world_map_2`). */
+export function toIdentifier(text: string): string {
+  let id = text.replace(/[^A-Za-z0-9_]/g, '_');
+  if (/^[0-9]/.test(id)) id = `_${id}`;
+  return RESERVED.has(id) ? `${id}_` : id;
 }
 
-const cache = new Map<string, Expr | ExprError>();
+let base: Environment | null = null;
+const environments = new Map<string, Environment>();
+const compiled = new Map<string, ParseResult | Error>();
 
-/** Parse with memoisation (expressions are re-evaluated on every render). */
-export function parseCached(src: string): Expr | ExprError {
-  let hit = cache.get(src);
+function environmentFor(scope: ExprScope): {env: Environment; key: string} {
+  const key = JSON.stringify(scope.map((b) => [b.name, b.outputs]));
+  let env = environments.get(key);
+  if (!env) {
+    base ??= baseEnvironment();
+    env = base.clone();
+    const seen = new Set<string>();
+    for (const block of scope) {
+      if (seen.has(block.name) || Object.keys(block.outputs).length === 0) continue;
+      seen.add(block.name);
+      const schema = Object.fromEntries(
+        Object.entries(block.outputs).map(([output, type]) => [output, celTypeOf(type)]),
+      );
+      env.registerVariable({name: block.name, schema});
+    }
+    if (environments.size > 20) environments.clear();
+    environments.set(key, env);
+  }
+  return {env, key};
+}
+
+function compile(src: string, scope: ExprScope): ParseResult | Error {
+  const {env, key} = environmentFor(scope);
+  const cacheKey = `${key}\u0000${src}`;
+  let hit = compiled.get(cacheKey);
   if (!hit) {
     try {
-      hit = parseExpr(src);
+      hit = env.parse(src);
     } catch (error) {
-      hit = error instanceof ExprError ? error : new ExprError(String(error), 0);
+      hit = error instanceof Error ? error : new Error(String(error));
     }
-    cache.set(src, hit);
+    if (compiled.size > 500) compiled.clear();
+    compiled.set(cacheKey, hit);
   }
   return hit;
 }
 
-// ---- Evaluation & inference ----
+// ---- Checking (for the editor) ----
+
+export type CheckResult =
+  | {ok: true; type: string}
+  | {ok: false; message: string; start?: number; end?: number};
+
+/** Parse + type-check `src`, optionally against the input's expected port type. */
+export function checkExpr(src: string, scope: ExprScope, expected?: PortType): CheckResult {
+  const parsed = compile(src, scope);
+  const result: {valid: boolean; type?: unknown; error?: unknown} =
+    parsed instanceof Error ? {valid: false, error: parsed} : parsed.check();
+  if (!result.valid) {
+    const error = result.error as Error & {summary?: string; range?: {start: number; end: number}};
+    return {
+      ok: false,
+      message: error?.summary ?? error?.message.split('\n')[0] ?? 'Invalid expression',
+      start: error?.range?.start,
+      end: error?.range?.end,
+    };
+  }
+  const type = String(result.type);
+  if (expected) {
+    const want = celTypeOf(expected);
+    if (want !== 'dyn' && type !== 'dyn' && type !== want) {
+      return {ok: false, message: `Returns ${type}, but this input expects ${want}`};
+    }
+  }
+  return {ok: true, type};
+}
+
+// ---- Evaluation ----
 
 export type OutputLookup = (blockId: string, output: string) => PortValue | null | undefined;
 
-export function evaluate(e: Expr, outputOf: OutputLookup): Value {
-  switch (e.kind) {
-    case 'lit':
-      return e.value;
-    case 'ref': {
-      let v: any = outputOf(e.blockId, e.output) ?? null;
-      for (const field of e.path) v = v == null ? null : (v[field] ?? null);
-      return v;
+/** Evaluate `src`; any parse, type or evaluation error yields null. */
+export function evaluateExpr(src: string, scope: ExprScope, outputOf: OutputLookup): PortValue | null {
+  const parsed = compile(src, scope);
+  if (parsed instanceof Error) return null;
+  // Only published outputs are present, so `has()` / `.?` see the difference.
+  const context: Record<string, Record<string, unknown>> = {};
+  for (const block of scope) {
+    const values: Record<string, unknown> = {};
+    for (const output of Object.keys(block.outputs)) {
+      const value = outputOf(block.blockId, output);
+      if (value != null) values[output] = value;
     }
-    case 'call': {
-      const spec = FUNCTIONS[e.fn];
-      const args = e.args.map((a) => evaluate(a, outputOf));
-      if (!spec.nullAware && args.some((a) => a == null)) return null;
-      try {
-        const result = spec.call(...args);
-        return typeof result === 'number' && !Number.isFinite(result) ? null : result;
-      } catch {
-        // A wrongly-shaped value (e.g. a bbox where a place was expected).
-        return null;
+    context[block.name] ??= values;
+  }
+  try {
+    return toPlain(parsed(context));
+  } catch {
+    return null;
+  }
+}
+
+/** CEL values → plain JSON (bigint → number, Map/class instances → objects, optional → value). */
+function toPlain(value: unknown): PortValue | null {
+  if (value == null) return null;
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value !== 'object') return value as PortValue;
+  const maybeOptional = value as {hasValue?: () => boolean; value?: () => unknown};
+  if (typeof maybeOptional.hasValue === 'function') {
+    return maybeOptional.hasValue() ? toPlain(maybeOptional.value!()) : null;
+  }
+  if (Array.isArray(value)) return value.map(toPlain) as PortValue;
+  const entries = value instanceof Map ? [...value.entries()] : Object.entries(value);
+  return Object.fromEntries(entries.map(([k, v]) => [String(k), toPlain(v)])) as PortValue;
+}
+
+// ---- References ----
+
+/** The `block.output` pairs an expression reads (by CEL name), from its AST. */
+export function referencedOutputs(src: string): {name: string; output: string}[] {
+  let ast: ASTNode;
+  try {
+    // Our environment's parser (the package-level one lacks optional chaining).
+    ast = (base ??= baseEnvironment()).parse(src).ast;
+  } catch {
+    return [];
+  }
+  const refs: {name: string; output: string}[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!node || typeof node !== 'object' || !('op' in node)) return;
+    const {op, args} = node as {op: string; args: unknown};
+    if ((op === '.' || op === '.?') && Array.isArray(args)) {
+      const [target, field] = args as [{op?: string; args?: unknown}, unknown];
+      if (target?.op === 'id' && typeof field === 'string') {
+        refs.push({name: String(target.args), output: field});
+        return;
       }
     }
-  }
-}
-
-/** Evaluate source text; a parse error yields null. */
-export function evaluateSource(src: string, outputOf: OutputLookup): Value {
-  const parsed = parseCached(src);
-  return parsed instanceof ExprError ? null : evaluate(parsed, outputOf);
-}
-
-export type PortTypeLookup = (blockId: string, output: string) => ValueType | undefined;
-
-/** Best-effort static type of an expression (`any` when unknown). */
-export function inferType(e: Expr, portType: PortTypeLookup): ValueType {
-  switch (e.kind) {
-    case 'lit':
-      return e.value === null ? 'any' : typeof e.value;
-    case 'ref':
-      if (e.path.length > 0) return 'any';
-      return portType(e.blockId, e.output) ?? 'any';
-    case 'call':
-      return FUNCTIONS[e.fn].type(e.args.map((a) => inferType(a, portType)));
-  }
-}
-
-/** Every block output an expression reads (for the editor summary). */
-export function refsOf(e: Expr): {blockId: string; output: string}[] {
-  if (e.kind === 'ref') return [{blockId: e.blockId, output: e.output}];
-  if (e.kind === 'call') return e.args.flatMap(refsOf);
-  return [];
+    walk(args);
+  };
+  walk(ast);
+  return refs;
 }
