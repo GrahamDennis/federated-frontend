@@ -1,0 +1,78 @@
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  color: #1b1f24;
+  background: #fbfcfd;
+}
+.actions {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.actions-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.actions-header h1 {
+  font-size: 17px;
+  margin: 0;
+}
+.actions-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1f8a4c;
+  border: 1px solid #1f8a4c;
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.actions-buttons {
+  display: flex;
+  gap: 8px;
+}
+.actions-buttons.column {
+  flex-direction: column;
+}
+.actions-buttons.row {
+  flex-wrap: wrap;
+}
+.actions-buttons button {
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid #c7ccd3;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.actions-buttons button:hover {
+  border-color: #2f6fe0;
+}
+.actions-buttons button.last {
+  border-color: #2f6fe0;
+  background: #e8f0fd;
+}
+.actions-kind {
+  color: #1f8a4c;
+  font-size: 11px;
+}
+.actions-empty,
+.actions-status {
+  margin: 0;
+  font-size: 13px;
+  color: #5a626c;
+}
+.actions-status {
+  color: #c62f4d;
+}

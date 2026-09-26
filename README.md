@@ -44,6 +44,9 @@ packages/
   plugin-histogram/ :5177  A "selection view" block for layouts: a brushable
                     population histogram of sample cities, filtered by a wired
                     viewport, publishing the picked city and brushed range.
+  plugin-actions/   :5178  An action-button block: the layout author supplies its
+                    buttons (a CEL list); each publishes a value and/or runs
+                    another block's command (authority comes from the wiring).
   plugin-registry/  :5180  Plugin distribution + discovery. Packages plugins as
                     ORAS-style OCI artifacts and serves them: a dumb
                     content-addressed endpoint (/content/<repo>@<digest>/) plus a
@@ -205,7 +208,10 @@ the detail map and Places. Wiring is edited in the block panel (⚙). An input c
 also be bound to a **derived expression** in [CEL](https://cel.dev), e.g.
 `bboxAround(histogram.selection, 1500)`. It is type-checked in the editor and
 evaluated by the host (see the "Nearby (derived)" view and
-[`docs/layouts.md`](docs/layouts.md)).
+[`docs/layouts.md`](docs/layouts.md)). An **action-button** block turns an
+author-written CEL list into buttons that publish values and run other blocks'
+commands. The host only runs a command the author wired into that block's
+inputs (see the "Quick actions" view).
 
 Apps stay kept-alive and are placed by `grid-area` only, so moving, swapping, or
 enlarging never reloads an iframe. The ⌘K palette and shared context span every
@@ -251,7 +257,7 @@ ages out by TTL / LRU size cap.
 
 ```bash
 npm install
-npm run dev       # host (:5173), plugin registry (:5180), and the 4 plugins (:5174–:5177)
+npm run dev       # host (:5173), plugin registry (:5180), and the 5 plugins (:5174–:5178)
 # open http://localhost:5173
 npm run typecheck
 npm test          # Playwright e2e (boots all the dev servers automatically)
@@ -314,6 +320,10 @@ exercising the cross-origin channels rather than mocking them:
   checking (syntax, unknown names, overloads, expected type) and references;
   end to end: the computed viewport in the Nearby view, and editing
   expressions (errors, inferred type, switching from a direct source).
+- `tests/actions.spec.ts` — the command-authority check and CEL button lists
+  (pure); in the Quick actions view: a value button driving every wired block,
+  a command button running the detail map's command, and authoring (command
+  chips, and a command that can't run being reported).
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.

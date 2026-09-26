@@ -1,5 +1,5 @@
 import {Environment, type ASTNode, type ParseResult} from '@marcbachmann/cel-js';
-import type {BBox, NumberRange, PortType, PortValue, SelectedPlace} from '@ff/protocol';
+import type {BBox, CommandRef, NumberRange, PortType, PortValue, SelectedPlace} from '@ff/protocol';
 
 /**
  * Derived expressions, in CEL (the Common Expression Language — cel.dev), via
@@ -37,11 +37,17 @@ class RangeValue {
     Object.assign(this, value);
   }
 }
+class CommandValue {
+  constructor(value: CommandRef) {
+    Object.assign(this, value);
+  }
+}
 
 const CEL_TYPES: Record<string, string> = {
   place: 'Place',
   bbox: 'BBox',
   range: 'Range',
+  command: 'Command',
   number: 'double',
   string: 'string',
   boolean: 'bool',
@@ -131,6 +137,11 @@ export const FUNCTIONS: {signature: string; doc: string; handler: (...args: any[
     handler: (west, south, east, north) => new BBoxValue({west, south, east, north}),
   },
   {
+    signature: 'command(string, string): Command',
+    doc: 'command(block, commandId): run another block’s command (from a button)',
+    handler: (block: string, command: string) => new CommandValue({block, command}),
+  },
+  {
     signature: 'range(double, double): Range',
     doc: 'range(min, max)',
     handler: (a: number, b: number) => new RangeValue({min: Math.min(a, b), max: Math.max(a, b)}),
@@ -148,10 +159,15 @@ export const IDIOMS: {example: string; doc: string}[] = [
   {example: 'a.?selection.orValue(b.selection)', doc: 'First available of two outputs'},
   {example: 'cond ? x : y', doc: 'Conditional'},
   {example: 'a.selection.latitude > 30.0', doc: 'Fields & comparisons (doubles need a .0)'},
+  {
+    example: '[{"label": "Tokyo", "value": place("Tokyo", 35.69, 139.69)}]',
+    doc: 'A list of buttons (label + value and/or command)',
+  },
 ];
 
 function baseEnvironment(): Environment {
-  const env = new Environment({enableOptionalTypes: true})
+  // Mixed-type list/map literals, so a button list can hold values and commands.
+  const env = new Environment({enableOptionalTypes: true, homogeneousAggregateLiterals: false})
     .registerType('Place', {
       ctor: Place,
       fields: {id: 'string', name: 'string', latitude: 'double', longitude: 'double'},
@@ -166,6 +182,11 @@ function baseEnvironment(): Environment {
       ctor: RangeValue,
       fields: {min: 'double', max: 'double'},
       convert: (v: NumberRange) => (v instanceof RangeValue ? v : new RangeValue(v)),
+    })
+    .registerType('Command', {
+      ctor: CommandValue,
+      fields: {block: 'string', command: 'string'},
+      convert: (v: CommandRef) => (v instanceof CommandValue ? v : new CommandValue(v)),
     });
   for (const fn of FUNCTIONS) env.registerFunction(fn.signature, fn.handler);
   return env;
@@ -277,9 +298,10 @@ export function evaluateExpr(src: string, scope: ExprScope, outputOf: OutputLook
   const context: Record<string, Record<string, unknown>> = {};
   for (const block of scope) {
     const values: Record<string, unknown> = {};
-    for (const output of Object.keys(block.outputs)) {
+    for (const [output, type] of Object.entries(block.outputs)) {
       const value = outputOf(block.blockId, output);
-      if (value != null) values[output] = value;
+      if (value == null) continue;
+      values[output] = celTypeOf(type) === 'dyn' ? reviveByShape(value) : value;
     }
     context[block.name] ??= values;
   }
@@ -288,6 +310,21 @@ export function evaluateExpr(src: string, scope: ExprScope, outputOf: OutputLook
   } catch {
     return null;
   }
+}
+
+/**
+ * A `dyn` output's value is a plain map at run time, which wouldn't match a
+ * typed overload like `bboxAround(Place, …)`. Recognise our value shapes and
+ * wrap them in their CEL types so they flow into typed functions.
+ */
+function reviveByShape(value: PortValue): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const has = (...keys: string[]) => keys.every((k) => k in value);
+  if (has('latitude', 'longitude', 'name')) return new Place(value as unknown as SelectedPlace);
+  if (has('west', 'south', 'east', 'north')) return new BBoxValue(value as unknown as BBox);
+  if (has('min', 'max')) return new RangeValue(value as unknown as NumberRange);
+  if (has('block', 'command')) return new CommandValue(value as unknown as CommandRef);
+  return value;
 }
 
 /** CEL values → plain JSON (bigint → number, Map/class instances → objects, optional → value). */

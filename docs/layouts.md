@@ -2,8 +2,9 @@
 
 Status: prototype implemented in the host (`packages/host/src/layout.ts`,
 `useLayouts.ts`, `LayoutStage.tsx`, `instances.ts`, `instanceFeed.ts`,
-`expressions.ts`); tests in `tests/layout.spec.ts`, `tests/blocks.spec.ts`,
-`tests/wiring.spec.ts` and `tests/expressions.spec.ts`.
+`expressions.ts`, `commands.ts`); tests in `tests/layout.spec.ts`,
+`tests/blocks.spec.ts`, `tests/wiring.spec.ts`, `tests/expressions.spec.ts` and
+`tests/actions.spec.ts`.
 
 ## Why slots and not windows
 
@@ -234,6 +235,46 @@ instance's viewport is `bboxAround(histogram.selection, 1500)`, so it lists the
 cities within 1,500 km of whatever you pick in the first. Places shows
 `nearby.?selection.orValue(histogram.selection)`.
 
+## Action buttons
+
+The `actions` plugin (`packages/plugin-actions`) is a block of buttons that the
+**layout author** defines, not the plugin. Its `buttons` input is usually bound
+to a CEL list:
+
+```
+[
+  {"label": "Tokyo", "value": place("Tokyo", 35.69, 139.69)},
+  {"label": "Fly the detail map to Sydney", "command": command("detail", "map.fly.sydney")}
+]
+```
+
+Pressing a button does one or both of these:
+
+- **Publish its `value`** on the `pressed` output, and its label on
+  `pressedLabel`. `pressed` has type `any`, so it can feed an input of any type
+  (the editor offers `any` outputs to every input). When it enters CEL, the
+  host converts a value of a known shape (place, bbox, range, command) to its
+  CEL type, so `bboxAround(actions.pressed, 1500)` works.
+- **Run its `command`**, which references another block's ⌘K command by the
+  block's expression name. The plugin asks the host with
+  `host.runCommand(ref)`.
+
+**Authority comes from the wiring.** Plugins are untrusted, so the host runs a
+command only if that exact `{block, command}` reference appears in the calling
+block's current inputs (`inputsAuthorize` in `commands.ts`). Those inputs were
+written by the layout author, so an action block can only trigger what it was
+explicitly given. A request it wasn't given is refused with a toast, and so is
+a reference to a block or command that isn't available.
+
+While editing a `buttons` input, the CEL editor offers the commands registered
+by the other blocks in the view as ready-made `command("name", "id")` chips.
+
+The **"Quick actions"** default view shows this:
+
+- Place buttons drive the detail map (`focus` ← `actions.pressed`), a nearby
+  histogram (`bboxAround(actions.pressed, 1500)`) and Places.
+- The last button runs the detail map's own "fly to Sydney" command.
+
 ## Towards an "app builder"
 
 An app builder is the same slot model with a palette of **blocks** (map,
@@ -250,12 +291,12 @@ Done:
    host routes values (see "Wiring blocks together" above).
 4. **Derived expressions.** A binding can be a CEL expression over block
    outputs (see "Derived expressions (CEL)" above).
+5. **Action blocks.** Author-defined buttons that publish values and run other
+   blocks' commands, with authority granted through wiring (see "Action
+   buttons" above).
 
 Still to do:
 
-5. **Action blocks.** Buttons that invoke another block's exported command (the
-   ⌘K command registry already proxies callbacks across iframes) or write to a
-   channel.
 6. **Nested / responsive grids** (optional). A slot could hold a sub-grid, and
    views could declare breakpoints. Leave both out until a use case needs them.
 
@@ -282,6 +323,8 @@ Still to do:
   for example via the AST.
 - Deleting a block removes direct wires from it. An expression that mentions it
   is kept and shows an "Unknown variable" error until it's fixed.
+- Commands are fire-and-forget: they take no arguments, and a button can't
+  pass its value to the command it runs.
 - Expressions are evaluated on the main thread, on every render that resolves
   inputs (parsed expressions are cached). A worker would only matter for heavy
   expressions.

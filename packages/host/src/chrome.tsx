@@ -11,6 +11,7 @@ import type {
   BlockInputs,
   BlockSettings,
   CommandDescriptor,
+  CommandRef,
   InstanceInfo,
   PortValue,
   ForwardedKeyEvent,
@@ -25,7 +26,8 @@ import {gridArea, resolveInputs, type Rect} from './layout';
 import {useInstanceFeed} from './instanceFeed';
 import {LayoutBar, SlotLayer, gridTemplate} from './LayoutStage';
 import {useLayouts} from './useLayouts';
-import {exprScope, instanceFor, type Instance} from './instances';
+import {exprScope, instanceFor, knownInstances, type Instance} from './instances';
+import {inputsAuthorize} from './commands';
 
 /**
  * The host chrome's shared services. Plugin hosts get at these (via {@link useChrome})
@@ -50,6 +52,8 @@ interface ChromeContextValue {
     instanceId: string,
     listener: (inputs: BlockInputs) => void,
   ): () => void;
+  /** Run a block's command on behalf of `callerId`, if its inputs authorize it. */
+  runCommandFor(callerId: string, ref: CommandRef): Promise<boolean>;
   /** All registered apps (so a plugin can be offered its siblings). */
   apps: AppDescriptor[];
   /** Bring an app to the foreground. */
@@ -281,6 +285,36 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       : {},
   );
 
+  // Commands run on behalf of a block (e.g. an action button). The command
+  // reference must appear in the caller's author-wired inputs; `ref.block` is a
+  // block's expression name.
+  const commandsRef = useRef(commandsByInstance);
+  commandsRef.current = commandsByInstance;
+  const byNameRef = useRef(new Map<string, Instance>());
+  byNameRef.current = new Map(knownInstances(layouts.blocks, apps).map((i) => [i.name, i]));
+  const runCommandFor = useCallback(
+    async (callerId: string, ref: CommandRef) => {
+      if (!inputsAuthorize(inputsFeed.get(callerId), ref)) {
+        toast(`Blocked: ${callerId} isn’t wired to run ${ref.block}:${ref.command}`, {
+          tone: 'critical',
+        });
+        return false;
+      }
+      const target = byNameRef.current.get(ref.block);
+      const command =
+        target && commandsRef.current.get(target.id)?.find((c) => c.id === ref.command);
+      if (!command) {
+        toast(`No command “${ref.command}” on block “${ref.block}” — is it on screen?`, {
+          tone: 'critical',
+        });
+        return false;
+      }
+      await command.run();
+      return true;
+    },
+    [inputsFeed.get, toast],
+  );
+
   // The palette spans the apps currently in the foreground — the primary app and
   // the open detail companion — so a composed workspace has one unified command
   // surface. Backgrounded apps stay alive but their commands aren't surfaced.
@@ -357,6 +391,7 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       publishOutput,
       getInstanceInputs: inputsFeed.get,
       subscribeInstanceInputs: inputsFeed.subscribe,
+      runCommandFor,
       apps,
       activateApp,
       getSharedContext,
@@ -375,6 +410,7 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       publishOutput,
       inputsFeed.get,
       inputsFeed.subscribe,
+      runCommandFor,
       apps,
       activateApp,
       getSharedContext,
@@ -506,7 +542,13 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
                   );
                 })}
               </div>
-              {layoutMode && <SlotLayer layouts={layouts} apps={apps} />}
+              {layoutMode && (
+                <SlotLayer
+                  layouts={layouts}
+                  apps={apps}
+                  commandsFor={(id) => commandsByInstance.get(id) ?? []}
+                />
+              )}
             </div>
           </main>
         </div>

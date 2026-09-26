@@ -1,0 +1,31 @@
+{
+  "id": "actions",
+  "name": "Action buttons",
+  "version": "0.0.0",
+  "kind": "plugin",
+  "entry": "index.html",
+  "description": "A block of buttons the layout author defines: each can publish a value on the `pressed` output and/or run another block's command.",
+  "settings": {
+    "title": {"type": "string", "label": "Title", "default": "Actions"},
+    "layout": {
+      "type": "select",
+      "label": "Layout",
+      "default": "column",
+      "options": [
+        {"value": "column", "label": "Stacked"},
+        {"value": "row", "label": "In a row"}
+      ]
+    }
+  },
+  "inputs": {
+    "buttons": {
+      "type": "buttons",
+      "label": "Buttons",
+      "description": "A list of {label, value?, command?} — usually a CEL list, e.g. [{\"label\": \"Tokyo\", \"value\": place(\"Tokyo\", 35.69, 139.69)}]."
+    }
+  },
+  "outputs": {
+    "pressed": {"type": "any", "label": "Value of the last button pressed"},
+    "pressedLabel": {"type": "string", "label": "Label of the last button pressed"}
+  }
+}
