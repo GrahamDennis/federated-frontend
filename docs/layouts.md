@@ -49,7 +49,7 @@ view unchanged if the result would break one.
 
 | | Who | Changes | Persistence |
 |---|---|---|---|
-| **Edit mode** ("✎ Edit layouts") | admin/author | grid size, slot geometry (drag to move, corner handle to resize, `+` on an empty cell to add, ✕ to remove), which block each slot shows, block names and settings (⚙), create/duplicate/delete/rename views | saved views + block registry (the layout service, per workspace and role; localStorage if the service is unreachable) |
+| **Edit mode** ("✎ Edit layouts") | admin/author | grid size, slot geometry (drag to move, corner handle to resize, `+` on an empty cell to add or drag across empty cells to draw a bigger slot, ✕ to remove; from the keyboard, focus a slot and use arrows to move, Shift+arrows to resize, Delete to remove), which block each slot shows, block names and settings (⚙), create/duplicate/delete/rename views | saved views + block registry (the layout service, per workspace and role; localStorage if the service is unreachable) |
 | **User mode** | operator | switch view (drop-down); change a slot's block (per-slot drop-down: pick an existing block, which **swaps** if it's shown elsewhere, or "+ New <app>" for another instance); enlarge a slot one cell at a time (⋯ → Expand ◀▶▲▼) or maximize it (⛶, or double-click the header) | ad-hoc copy per view, discarded by "Reset view". Enlargement is cleared when the view changes. A block created here is added to the registry, but only the slot assignment is ad hoc |
 
 When a slot is enlarged, the slots it overlaps are **covered**. Their apps stay
@@ -57,8 +57,10 @@ alive but hidden, and come back on restore.
 
 ## How it fits the plugin host
 
-The existing host keeps every activated app mounted and positions it purely by
-class. It never reparents an iframe, because moving an iframe in the DOM reloads
+The host keeps activated apps mounted and positions them purely by class. Hidden
+instances stay alive up to a per-viewer cap (`ff.keepAliveHidden`, default 4),
+in most-recently-visible order; beyond that the least recently seen are
+unmounted and reload if shown again. It never reparents an iframe, because moving an iframe in the DOM reloads
 it. Layouts keep that rule by splitting the stage into two layers that share one
 CSS grid template:
 
@@ -149,8 +151,9 @@ At run time:
   else is dropped and reported once as a toast and a console warning, rather
   than being passed downstream.
 - Port types are names (`place`, `bbox`, `range`, …) with shapes agreed in
-  `@ff/protocol`. The host treats values as opaque JSON and only uses the type
-  name to decide which outputs may feed which inputs.
+  `@ff/protocol`. The host uses the type name to decide which outputs may
+  feed which inputs, and to check published values (above). Otherwise values
+  are plain JSON that it passes through.
 
 In edit mode, the block panel (⚙) lists each input with a drop-down of
 type-compatible outputs from the other blocks in the view, and lists the
@@ -470,9 +473,9 @@ Still to do:
 - Events and presence live in one service process's memory. Several replicas
   would need a shared bus (e.g. Redis pub/sub or Postgres LISTEN/NOTIFY).
 - Ad-hoc slot changes aren't encoded in the URL. Only the view id is.
-- Adding a slot is click-per-cell then resize. There's no rubber-band draw, and
-  no keyboard-accessible move/resize yet (the pickers and menus are keyboard
-  accessible).
+- Keyboard editing covers moving, resizing and removing slots. Adding a slot
+  from the keyboard is one cell at a time (Tab to a `+`, press Enter), then
+  resize.
 - A block can occupy only one slot per view at a time. Show the same app twice
   by creating a second block.
 - Unused blocks aren't garbage-collected automatically. They can be deleted by

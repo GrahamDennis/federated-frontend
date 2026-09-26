@@ -86,6 +86,25 @@ interface Toast {
 
 let nextToastId = 1;
 
+const MAX_HIDDEN_KEY = 'ff.keepAliveHidden';
+const DEFAULT_MAX_HIDDEN = 4;
+
+/**
+ * How many hidden (backgrounded) instances to keep running. A per-viewer
+ * setting (localStorage `ff.keepAliveHidden`) — e.g. lower on a low-memory
+ * device.
+ */
+function readMaxHidden(): number {
+  try {
+    const n = Number(localStorage.getItem(MAX_HIDDEN_KEY));
+    return Number.isInteger(n) && n >= 0 && localStorage.getItem(MAX_HIDDEN_KEY) !== null
+      ? n
+      : DEFAULT_MAX_HIDDEN;
+  } catch {
+    return DEFAULT_MAX_HIDDEN;
+  }
+}
+
 export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // Initial workspace (primary app, docked detail, shared selection) comes from
   // the URL, so deep links / reloads restore the composed view.
@@ -152,16 +171,6 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     },
     [apps],
   );
-
-  // Instances shown in layout slots join the kept-alive set (so switching views
-  // or modes doesn't reload them).
-  useEffect(() => {
-    if (layoutPlacements.size === 0) return;
-    setAliveAppIds((prev) => {
-      const added = [...layoutPlacements.keys()].filter((id) => !prev.includes(id));
-      return added.length ? [...prev, ...added] : prev;
-    });
-  }, [layoutPlacements]);
 
   const openDetail = useCallback((id: string) => {
     setDetailAppId(id);
@@ -234,6 +243,11 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // so that adding one never moves an existing iframe in the DOM (which would
   // reload it); the MRU order above is only for bookkeeping.
   const mountOrder = useRef<string[]>([]);
+  // Evicted instances leave the order too, so if they come back they're
+  // appended (never inserted before an existing iframe, which would reload it).
+  mountOrder.current = mountOrder.current.filter(
+    (id) => aliveAppIds.includes(id) || layoutPlacements.has(id),
+  );
   for (const id of [...aliveAppIds, ...layoutPlacements.keys()]) {
     if (!mountOrder.current.includes(id)) mountOrder.current.push(id);
   }
@@ -347,6 +361,19 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
         : [activeAppId, detailAppId].filter((id): id is string => Boolean(id)),
     [layoutMode, layoutPlacements, activeAppId, detailAppId],
   );
+  // Keep-alive, bounded. Visible instances are always alive; hidden ones stay
+  // alive (iframe, thread and state intact) in most-recently-visible order, up
+  // to a per-viewer cap — beyond it the least recently seen are unmounted, which
+  // frees their iframes; they reload if shown again.
+  const [maxHidden] = useState(readMaxHidden);
+  useEffect(() => {
+    setAliveAppIds((prev) => {
+      const hidden = prev.filter((id) => !visibleAppIds.includes(id));
+      const next = [...visibleAppIds, ...hidden.slice(0, maxHidden)];
+      return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next;
+    });
+  }, [visibleAppIds, maxHidden]);
+
   // When several instances of one app are visible, their commands would read
   // identically, so each is tagged with its instance's label.
   const activeCommands = useMemo(() => {

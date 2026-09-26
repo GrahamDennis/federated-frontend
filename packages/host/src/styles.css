@@ -1027,3 +1027,17 @@ code {
   flex: 1;
   font-family: ui-monospace, monospace;
 }
+
+/* Keyboard-focusable slots in edit mode; visually hidden announcements. */
+.slot-layer.editing .slot-edit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

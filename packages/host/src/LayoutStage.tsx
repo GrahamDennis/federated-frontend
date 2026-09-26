@@ -350,6 +350,82 @@ export function SlotLayer({
     setDrag({...drag, rect, valid: canPlace(view, rect, drag.slotId)});
   }
 
+  // ---- Drawing a new slot: drag across empty cells ("rubber band") ----
+  const [band, setBand] = useState<{start: {col: number; row: number}; rect: Rect; valid: boolean} | null>(
+    null,
+  );
+  // Set while a multi-cell drag finishes, so its click doesn't add a slot too.
+  const bandAdded = useRef(false);
+
+  function beginBand(event: PointerEvent, cell: Rect) {
+    if (event.button !== 0) return;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    setBand({start: {col: cell.col, row: cell.row}, rect: cell, valid: true});
+  }
+  function moveBand(event: PointerEvent) {
+    if (!band) return;
+    const at = cellAt(event);
+    const rect = {
+      col: Math.min(band.start.col, at.col),
+      row: Math.min(band.start.row, at.row),
+      colSpan: Math.abs(at.col - band.start.col) + 1,
+      rowSpan: Math.abs(at.row - band.start.row) + 1,
+    };
+    setBand({...band, rect, valid: canPlace(view, rect)});
+  }
+  function endBand() {
+    if (!band) return;
+    const {rect, valid} = band;
+    setBand(null);
+    // A single cell is left to the click handler (which also serves keyboards).
+    if (rect.colSpan * rect.rowSpan === 1) return;
+    // It was a drag, so the click that follows it (if any — the cell it started
+    // on may be gone) mustn't also add a slot. Only this gesture's click.
+    bandAdded.current = true;
+    setTimeout(() => (bandAdded.current = false), 0);
+    if (valid) {
+      layouts.updateDraft((d) => addSlot(d, rect));
+      announce(`Added a ${rect.colSpan}×${rect.rowSpan} slot`);
+    } else {
+      announce('Can’t add a slot over other slots');
+    }
+  }
+
+  // ---- Keyboard: move with arrows, resize with Shift+arrows, Delete removes ----
+  const [announcement, setAnnouncement] = useState('');
+  const announce = (text: string) => setAnnouncement(`${text}.`);
+
+  function slotKeyDown(event: KeyboardEvent, slotId: string) {
+    if (event.target !== event.currentTarget) return; // typing in the box's own controls
+    const slot = view.slots.find((s) => s.id === slotId);
+    if (!slot) return;
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      layouts.updateDraft((d) => removeSlot(d, slotId));
+      announce(`Removed slot ${slotId}`);
+      return;
+    }
+    const deltas: Record<string, [number, number]> = {
+      ArrowLeft: [-1, 0],
+      ArrowRight: [1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    };
+    const delta = deltas[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    const [dx, dy] = delta;
+    const rect = event.shiftKey
+      ? {...rectOf(slot), colSpan: slot.colSpan + dx, rowSpan: slot.rowSpan + dy}
+      : {...rectOf(slot), col: slot.col + dx, row: slot.row + dy};
+    if (!canPlace(view, rect, slotId)) {
+      announce(event.shiftKey ? 'Can’t resize there' : 'Can’t move there');
+      return;
+    }
+    layouts.updateDraft((d) => placeSlot(d, slotId, rect));
+    announce(`Slot ${slotId}: ${describeRect(rect)}`);
+  }
+
   function endDrag() {
     if (!drag) return;
     const {slotId, rect} = drag;
@@ -372,7 +448,15 @@ export function SlotLayer({
             style={{gridArea: gridArea(cell)}}
             title="Add a slot here"
             aria-label={`Add slot at column ${cell.col + 1}, row ${cell.row + 1}`}
-            onClick={() => layouts.updateDraft((d) => d && addSlot(d, cell))}
+            onPointerDown={(e) => beginBand(e, cell)}
+            onPointerMove={moveBand}
+            onPointerUp={endBand}
+            onPointerCancel={() => setBand(null)}
+            onClick={() => {
+              if (bandAdded.current) return;
+              layouts.updateDraft((d) => d && addSlot(d, cell));
+              announce('Added a 1×1 slot');
+            }}
           >
             +
           </button>
@@ -385,6 +469,11 @@ export function SlotLayer({
             className={`slot slot-edit${drag?.slotId === r.slot.id ? ' dragging' : ''}`}
             data-slot={r.slot.id}
             style={{gridArea: gridArea(r.rect)}}
+            tabIndex={0}
+            role="group"
+            aria-label={`Slot ${r.slot.id}: ${instance(r.slot.blockId)?.label ?? 'empty'}, ${describeRect(r.slot)}`}
+            aria-description="Arrow keys move, Shift+arrow keys resize, Delete removes"
+            onKeyDown={(e) => slotKeyDown(e, r.slot.id)}
             onPointerDown={(e) => beginDrag(e, r.slot.id, 'move')}
             onPointerMove={moveDrag}
             onPointerUp={endDrag}
@@ -470,6 +559,17 @@ export function SlotLayer({
           className={`slot-ghost${drag.valid ? '' : ' invalid'}`}
           style={{gridArea: gridArea(drag.rect)}}
         />
+      )}
+      {band && band.rect.colSpan * band.rect.rowSpan > 1 && (
+        <div
+          className={`slot-ghost${band.valid ? '' : ' invalid'}`}
+          style={{gridArea: gridArea(band.rect)}}
+        />
+      )}
+      {editing && (
+        <div className="sr-only" aria-live="polite" role="status" aria-label="Layout editor">
+          {announcement}
+        </div>
       )}
     </div>
   );
@@ -670,6 +770,11 @@ function RenameField({
       {error && <small className="expr-error">{error}</small>}
     </div>
   );
+}
+
+/** "2×1 at column 1, row 3" — for screen readers and announcements. */
+function describeRect(r: Rect): string {
+  return `${r.colSpan}×${r.rowSpan} at column ${r.col + 1}, row ${r.row + 1}`;
 }
 
 /** Whether a block has anything to author in the block panel. */
