@@ -3,10 +3,12 @@ import {dirname, join, resolve} from 'node:path';
 import {serve} from '@hono/node-server';
 import {Hono, type Context} from 'hono';
 import {cors} from 'hono/cors';
+import {streamSSE} from 'hono/streaming';
 import {validateLayout, type Block, type BlockRegistry, type LayoutView} from '@ff/layout-model';
 import {loadConfig} from './config';
 import {WorkspaceStore, isWorkspaceId, type UserState, type Workspace} from './store';
 import {issueToken, verifyBearer} from './auth';
+import {EventHub} from './events';
 import {AppCatalog} from './apps';
 
 const PKG_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,6 +21,15 @@ const store = new WorkspaceStore(
   config.seedViewRoles ?? {},
 );
 const catalog = new AppCatalog(config.registry);
+const hub = new EventHub();
+
+/**
+ * Tell everyone in a workspace that layouts changed. Clients refetch (so role
+ * filtering stays on the server) and re-check their drafts and ad-hoc copies.
+ */
+function layoutsChanged(workspace: string, by: {user: string; name: string}, views: string[]) {
+  hub.broadcast(workspace, {event: 'layouts-changed', data: {views, by: {id: by.user, name: by.name}}});
+}
 
 /**
  * Who's asking: taken *only* from the verified token's claims (user, role,
@@ -61,7 +72,16 @@ app.use(
 app.get('/', (c) =>
   c.json({
     service: '@ff/layout-service',
-    endpoints: ['/v1/auth', '/v1/me', '/v1/me/state', '/v1/roles', '/v1/layouts', '/v1/validate'],
+    endpoints: [
+      '/v1/auth',
+      '/v1/me',
+      '/v1/me/state',
+      '/v1/events',
+      '/v1/presence',
+      '/v1/roles',
+      '/v1/layouts',
+      '/v1/validate',
+    ],
   }),
 );
 
@@ -104,6 +124,44 @@ app.get('/v1/me', async (c) => {
     canEdit: who.canEdit,
     workspace: who.workspace,
   });
+});
+
+// ---- Live updates ----
+
+/**
+ * Server-sent events for this workspace: `hello` (this connection's id),
+ * `presence` (who is editing what), `layouts-changed` (refetch), and a `ping`
+ * every 15s to keep proxies from closing the stream. Authenticated like every
+ * other call — clients use a streaming fetch so the token stays in a header.
+ */
+app.get('/v1/events', async (c) => {
+  const who = await caller(c);
+  if ('error' in who) return who.error;
+  return streamSSE(c, async (stream) => {
+    const connId = hub.connect(who.workspace, who.user, who.name, (e) => {
+      void stream.writeSSE({event: e.event, data: JSON.stringify(e.data)});
+    });
+    let open = true;
+    stream.onAbort(() => {
+      open = false;
+      hub.disconnect(who.workspace, connId);
+    });
+    await stream.writeSSE({event: 'hello', data: JSON.stringify({connId})});
+    await stream.writeSSE({event: 'presence', data: JSON.stringify(hub.presence(who.workspace))});
+    while (open) {
+      await stream.sleep(15_000);
+      if (open) await stream.writeSSE({event: 'ping', data: '{}'});
+    }
+  });
+});
+
+/** Mark which view this connection is editing (or null), for presence. */
+app.put('/v1/presence', async (c) => {
+  const who = await caller(c);
+  if ('error' in who) return who.error;
+  const {connId, viewId} = await c.req.json<{connId: string; viewId: string | null}>();
+  const ok = hub.setEditing(who.workspace, connId, who.user, viewId ?? null);
+  return ok ? c.body(null, 204) : c.json({error: 'Unknown connection'}, 404);
 });
 
 const EMPTY_STATE: UserState = {liveByView: {}, blocks: {}};
@@ -254,6 +312,7 @@ app.put('/v1/layouts/views/:id', async (c) => {
     views: current ? ws.views.map((v) => (v.id === view.id ? saved : v)) : [...ws.views, saved],
   };
   await store.put(who.workspace, next);
+  layoutsChanged(who.workspace, who, [view.id]);
   return c.json(visibleTo(next, who.role, who.canEdit));
 });
 
@@ -279,6 +338,7 @@ app.delete('/v1/layouts/views/:id', async (c) => {
   if (views.length === 0) return c.json({error: 'Can’t delete the last view'}, 409);
   const next = {...ws, views};
   await store.put(who.workspace, next);
+  layoutsChanged(who.workspace, who, [target.id]);
   return c.json(visibleTo(next, who.role, who.canEdit));
 });
 
@@ -291,6 +351,7 @@ app.post('/v1/layouts/reset', async (c) => {
   // the views they were based on now have new revisions.
   const next = {...store.seed(previous), userState: previous.userState};
   await store.put(who.workspace, next);
+  layoutsChanged(who.workspace, who, [...new Set([...previous.views, ...next.views].map((v) => v.id))]);
   return c.json(visibleTo(next, who.role, who.canEdit));
 });
 

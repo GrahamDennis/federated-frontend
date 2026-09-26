@@ -88,6 +88,7 @@ export function LayoutBar({layouts}: {layouts: Layouts}) {
             Reset view
           </button>
         )}
+        <EditingNow layouts={layouts} viewId={layouts.activeViewId} verb="is editing this view" />
         <span className="layout-bar-spacer" />
         {layouts.canEdit && layouts.views.length > 0 && (
           <button className="btn" onClick={layouts.startEditing}>
@@ -183,6 +184,17 @@ export function LayoutBar({layouts}: {layouts: Layouts}) {
           <small>(editors see every view)</small>
         </div>
       )}
+      <EditingNow layouts={layouts} viewId={view.id} verb="is also editing this view" />
+      {layouts.stale && !layouts.conflict && (
+        <div className="layout-conflict" role="alert" aria-label="Stale edit">
+          <strong>{layouts.stale}</strong> Saving now will conflict.
+          <div className="layout-conflict-actions">
+            <button className="btn" onClick={layouts.reloadLatest}>
+              Reload latest (discard my changes)
+            </button>
+          </div>
+        </div>
+      )}
       {layouts.conflict && (
         <div className="layout-conflict" role="alert" aria-label="Edit conflict">
           <strong>Someone else changed this while you were editing.</strong>
@@ -214,12 +226,32 @@ export function LayoutBar({layouts}: {layouts: Layouts}) {
   );
 }
 
+/** Who else (other live connections) is editing a view right now. */
+function EditingNow({layouts, viewId, verb}: {layouts: Layouts; viewId: string; verb: string}) {
+  const names = [...new Set(layouts.othersEditing.filter((p) => p.viewId === viewId).map((p) => p.name))];
+  if (names.length === 0) return null;
+  return (
+    <span className="editing-now" role="status">
+      ✎ {names.join(', ')} {verb}
+    </span>
+  );
+}
+
 /** Where layouts are coming from: the service (shared, per role) or this browser. */
 function SourceBadge({layouts}: {layouts: Layouts}) {
   return layouts.source === 'service' ? (
-    <span className="source-badge service" title="Layouts are served by the layout service">
-      ● Shared
-    </span>
+    <>
+      <span className="source-badge service" title="Layouts are served by the layout service">
+        ● Shared
+      </span>
+      <span
+        className={`live-indicator${layouts.live ? ' on' : ''}`}
+        aria-label={layouts.live ? 'Live updates on' : 'Live updates reconnecting'}
+        title={layouts.live ? 'Changes by others appear as they happen' : 'Reconnecting…'}
+      >
+        {layouts.live ? 'live' : 'offline'}
+      </span>
+    </>
   ) : (
     <span
       className="source-badge local"

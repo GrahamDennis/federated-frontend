@@ -20,6 +20,7 @@ import {
   type LayoutView,
   type ValidationError,
 } from '@ff/layout-model';
+import {subscribeLayoutEvents} from './layoutEvents';
 import {
   AuthExpired,
   LayoutClient,
@@ -277,7 +278,7 @@ export function useLayouts(initialViewId: string | null) {
         // Keep only copies still based on the current approved revision.
         const liveByView = Object.fromEntries(
           Object.entries(state.liveByView).filter(
-            ([id, live]) => served.views.find((v) => v.id === id)?.rev === live.rev,
+            ([id, copy]) => served.views.find((v) => v.id === id)?.rev === copy.rev,
           ),
         );
         applyServed(served);
@@ -299,6 +300,80 @@ export function useLayouts(initialViewId: string | null) {
       cancelled = true;
     };
   }, [client, session, applyServed, goLocal, signInAs]);
+
+  // ---- Live updates & presence (service mode) ----
+  const [connected, setConnected] = useState(false);
+  const [connId, setConnId] = useState<string | null>(null);
+  const [presence, setPresence] = useState<
+    {connId: string; user: string; name: string; viewId: string}[]
+  >([]);
+  /** The view being edited was changed (or deleted) by someone else. */
+  const [stale, setStale] = useState<string | null>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  /** Drop ad-hoc copies whose approved view has moved on (or gone). */
+  const keepFreshCopies = useCallback(
+    (copies: Record<string, LayoutView>, fresh: LayoutView[]) =>
+      Object.fromEntries(
+        Object.entries(copies).filter(
+          ([id, copy]) => fresh.find((v) => v.id === id)?.rev === copy.rev,
+        ),
+      ),
+    [],
+  );
+
+  // Someone changed layouts: refetch what this role sees, drop stale ad-hoc
+  // copies, and warn (before they save) anyone editing a view that changed.
+  const onLayoutsChanged = useCallback(
+    async (data: {views: string[]; by: {id: string; name: string}}) => {
+      if (!client) return;
+      let served: ServedLayouts;
+      try {
+        served = await client.load();
+      } catch {
+        return;
+      }
+      applyServed(served);
+      setLiveByView((copies) => keepFreshCopies(copies, served.views));
+      const d = draftRef.current;
+      if (d && !d.isNew && data.views.includes(d.view.id)) {
+        const current = served.views.find((v) => v.id === d.view.id);
+        if (!current) setStale(`${data.by.name} deleted this view while you were editing it.`);
+        else if (current.rev !== d.view.rev) {
+          setStale(`${data.by.name} saved a newer version of this view while you were editing it.`);
+        }
+      }
+    },
+    [client, applyServed, keepFreshCopies],
+  );
+  const onLayoutsChangedRef = useRef(onLayoutsChanged);
+  onLayoutsChangedRef.current = onLayoutsChanged;
+
+  useEffect(() => {
+    if (!session || source !== 'service') return;
+    return subscribeLayoutEvents(
+      session.token,
+      ({event, data}) => {
+        if (event === 'hello') setConnId(data.connId);
+        else if (event === 'presence') setPresence(data);
+        else if (event === 'layouts-changed') void onLayoutsChangedRef.current(data);
+      },
+      (connected) => {
+        setConnected(connected);
+        if (!connected) {
+          setConnId(null);
+          setPresence([]);
+        }
+      },
+    );
+  }, [session, source === 'service']);
+
+  // Tell others which view this connection is editing.
+  const editingViewId = draft && !draft.isNew ? draft.view.id : null;
+  useEffect(() => {
+    if (client && connId) void client.setPresence(connId, editingViewId).catch(() => {});
+  }, [client, connId, editingViewId]);
 
   // Save the user's ad-hoc changes whenever they change (service mode).
   useEffect(() => {
@@ -509,6 +584,7 @@ export function useLayouts(initialViewId: string | null) {
     setConflict(null);
     setEnlargement(null);
     setSaveErrors([]);
+    setStale(null);
   }, [savedView, saved.blocks]);
 
   const newDraft = useCallback((copyOf?: LayoutView) => {
@@ -528,6 +604,7 @@ export function useLayouts(initialViewId: string | null) {
     setDraft(null);
     setSaveErrors([]);
     setConflict(null);
+    setStale(null);
   }, []);
 
   /** Run a service mutation; a rejection (e.g. validation) keeps the draft open. */
@@ -541,6 +618,7 @@ export function useLayouts(initialViewId: string | null) {
         setDraft(null);
         setSaveErrors([]);
         setConflict(null);
+        setStale(null);
         after?.(served);
       } catch (error) {
         if (error instanceof LayoutConflict) {
@@ -605,14 +683,15 @@ export function useLayouts(initialViewId: string | null) {
     setDraft(null);
   }, [draft, views, source, mutate]);
 
-  /** Resolve a conflict by discarding this edit and loading the latest. */
+  /** Resolve a conflict (or a stale draft) by discarding this edit and loading the latest. */
   const reloadLatest = useCallback(() => {
-    if (!conflict) return;
-    applyServed(conflict.current);
+    if (conflict) applyServed(conflict.current);
+    else if (client) void client.load().then(applyServed, () => {});
     setDraft(null);
     setConflict(null);
+    setStale(null);
     setSaveErrors([]);
-  }, [conflict, applyServed]);
+  }, [conflict, client, applyServed]);
 
   /**
    * Resolve a conflict by saving this edit over theirs: the same changes,
@@ -664,6 +743,11 @@ export function useLayouts(initialViewId: string | null) {
     canEdit,
     saveErrors,
     conflict: conflict?.conflicts ?? null,
+    stale,
+    /** Whether live updates are connected. */
+    live: connected,
+    /** Others (other connections) currently editing each view. */
+    othersEditing: presence.filter((p) => p.connId !== connId),
     reloadLatest,
     overwriteTheirs,
     saving,

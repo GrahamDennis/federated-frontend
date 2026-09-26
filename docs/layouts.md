@@ -248,6 +248,8 @@ configured by `layout-service.config.yaml`):
 | `GET /v1/auth`, `POST /v1/auth/dev-login` | anyone | How to sign in; **dev only**: get a token for a configured user (no password) |
 | `GET /v1/me` | signed in | Who the token says you are: user, role, workspace |
 | `GET`/`PUT /v1/me/state` | signed in | Your own ad-hoc changes in this workspace (private to you) |
+| `GET /v1/events` | signed in | Server-sent events: `hello`, `presence`, `layouts-changed`, `ping` |
+| `PUT /v1/presence` | signed in | Say which view this live connection is editing (or none) |
 | `GET /v1/roles` | anyone | The roles and which of them can edit |
 | `GET /v1/layouts` | any role | That role's views plus the block registry. Editors see every view; other roles see views whose `roles` include them |
 | `PUT /v1/layouts/views/:id` | editors | Save a view plus the blocks the edit changed or deleted, **after conflict and validation checks**: `409` if someone else changed them first, `422` with errors if invalid |
@@ -283,6 +285,24 @@ For production:
   cross-origin iframes, so they can't read the host's localStorage either way.
 
 The service-side authorization stays as it is.
+
+**Live updates and presence.** Each signed-in host keeps an authenticated
+server-sent-events stream open (`GET /v1/events`). It uses a streaming
+`fetch`, so the token stays in a header rather than the URL, and reconnects
+with backoff; the layout bar shows *live* or *offline*.
+
+- **Changes arrive live.** Every save, delete and reset broadcasts
+  `layouts-changed` (which views, and by whom) to the workspace. Hosts refetch
+  what their role may see, so role filtering stays on the server. An ad-hoc
+  copy whose approved view moved on is dropped immediately.
+- **Stale drafts are flagged early.** An editor whose open draft is now out of
+  date is warned straight away ("Alice saved a newer version of this view…
+  Saving now will conflict"), with *Reload latest*. The `409` at save time is
+  still there as the backstop.
+- **Presence.** Entering or leaving edit mode sets the connection's presence
+  (`PUT /v1/presence`), and everyone sees "✎ Alice is editing this view"
+  (editors see "is also editing"). Presence belongs to the connection, so
+  closing the tab or losing the network clears it without heartbeats.
 
 **Per-user state.** Each user's ad-hoc changes are stored privately per
 workspace (`/v1/me/state`) and follow them across reloads and devices:
@@ -406,8 +426,10 @@ Still to do:
   service"). A real identity provider (OIDC) is the step before production.
 - Enlarged or maximized slots aren't part of the saved per-user state, by
   design (they're momentary).
-- Conflicts are resolved per entity (keep mine or take theirs). There's no
-  field-level merge, and no live notification that someone else is editing.
+- Conflicts are resolved per entity (keep mine or take theirs); there's no
+  field-level merge.
+- Events and presence live in one service process's memory. Several replicas
+  would need a shared bus (e.g. Redis pub/sub or Postgres LISTEN/NOTIFY).
 - Ad-hoc slot changes aren't encoded in the URL. Only the view id is.
 - Adding a slot is click-per-cell then resize. There's no rubber-band draw, and
   no keyboard-accessible move/resize yet (the pickers and menus are keyboard

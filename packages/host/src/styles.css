@@ -998,3 +998,24 @@ code {
   display: flex;
   gap: 8px;
 }
+
+/* Live updates & presence. */
+.live-indicator {
+  font-size: 11px;
+  color: var(--subdued);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.live-indicator.on {
+  color: var(--success);
+}
+.editing-now {
+  font-size: 12px;
+  color: #d29922;
+  border: 1px solid #d29922;
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.layout-bar.editing .editing-now {
+  flex-basis: auto;
+}

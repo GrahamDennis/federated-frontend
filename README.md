@@ -345,6 +345,10 @@ exercising the cross-origin channels rather than mocking them:
   identity (only a valid token counts: no or tampered tokens get 401 and role
   headers are ignored); and per-user state (private per user, following them
   across reloads, and dropped when the approved view changes).
+- `tests/live.spec.ts` — live updates and presence across two people: another
+  user's view refreshing when an editor saves, "is editing" appearing and
+  clearing (including when the editor's tab closes), an editor warned before
+  saving a view someone else changed, and an ad-hoc copy dropped live.
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.
