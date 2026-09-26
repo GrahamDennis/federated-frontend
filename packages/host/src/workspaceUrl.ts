@@ -6,6 +6,7 @@ import type {AppDescriptor} from './apps';
  * touch it), so it serializes the workspace into the URL and restores it on load:
  *
  *   ?app=<primary>&detail=<companion>&ctx=<url-encoded JSON shared context>
+ *   ?mode=layout&view=<layout view id>&ctx=…
  *
  * This makes a composed view shareable / bookmarkable / reloadable — augmenting
  * browser tabs rather than replacing them. The shared context is round-tripped as
@@ -15,6 +16,10 @@ export interface WorkspaceState {
   appId: string | undefined;
   detailId: string | null;
   context: SharedContext;
+  /** `apps` (one primary app + optional detail) or `layout` (a slot grid view). */
+  mode: 'apps' | 'layout';
+  /** The active layout view; validated against the saved views by the chrome. */
+  viewId: string | null;
 }
 
 export function readWorkspaceFromUrl(apps: AppDescriptor[]): WorkspaceState {
@@ -39,7 +44,10 @@ export function readWorkspaceFromUrl(apps: AppDescriptor[]): WorkspaceState {
     }
   }
 
-  return {appId, detailId, context};
+  const mode = params.get('mode') === 'layout' ? 'layout' : 'apps';
+  const viewId = params.get('view');
+
+  return {appId, detailId, context, mode, viewId};
 }
 
 export function writeWorkspaceToUrl(
@@ -49,8 +57,13 @@ export function writeWorkspaceToUrl(
   const params = new URLSearchParams();
   const defaultId = apps.find((app) => !app.detail)?.id;
 
-  if (state.appId && state.appId !== defaultId) params.set('app', state.appId);
-  if (state.detailId) params.set('detail', state.detailId);
+  if (state.mode === 'layout') {
+    params.set('mode', 'layout');
+    if (state.viewId) params.set('view', state.viewId);
+  } else {
+    if (state.appId && state.appId !== defaultId) params.set('app', state.appId);
+    if (state.detailId) params.set('detail', state.detailId);
+  }
 
   const cleaned = cleanContext(state.context);
   if (cleaned) params.set('ctx', JSON.stringify(cleaned));

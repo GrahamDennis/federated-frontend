@@ -460,3 +460,305 @@ code {
   padding: 18px;
   line-height: 1.6;
 }
+
+/* ---- Layout mode: a grid of slots from a saved view ---- */
+.mode-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mode-toggle button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 12px;
+  background: var(--panel-2);
+  color: var(--subdued);
+  border: 0;
+  cursor: pointer;
+}
+.mode-toggle button + button {
+  border-left: 1px solid var(--border);
+}
+.mode-toggle button.active {
+  background: var(--accent-2);
+  color: var(--text);
+}
+
+.app-rail[hidden] {
+  display: none;
+}
+
+/* Layout mode fills the viewport: the grid's rows are fractions of it. */
+.chrome.layout-mode {
+  height: 100vh;
+  min-height: 0;
+}
+.layout-mode .content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow: hidden;
+}
+.stage {
+  position: relative;
+  height: 100%;
+}
+.layout-mode .stage {
+  flex: 1;
+  min-height: 0;
+}
+
+.layout-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+}
+.layout-bar.editing {
+  padding: 8px 10px;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.layout-bar-mode {
+  color: var(--accent);
+  font-weight: 600;
+}
+.layout-bar-spacer {
+  flex: 1;
+}
+.layout-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--subdued);
+}
+.layout-field select,
+.layout-field input,
+.slot-app-picker {
+  font: inherit;
+  font-size: 13px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+.layout-field input[type='number'] {
+  width: 52px;
+}
+
+/* Content layer: the kept-alive app cards, placed by grid-area. */
+.panes.layout-grid {
+  --layout-gap: 12px; /* keep in sync with LAYOUT_GAP */
+  gap: var(--layout-gap);
+  height: 100%;
+}
+.pane-slot {
+  min-width: 0;
+  min-height: 0;
+  padding-top: 34px; /* room for the slot header drawn by the slot layer */
+  background: var(--panel);
+  border-radius: 10px;
+  overflow: hidden;
+}
+/* The slot layer owns the frame + header, so the card's own chrome is dropped. */
+.pane-slot .app-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+}
+.pane-slot .app-titlebar {
+  display: none;
+}
+.pane-slot .app-frame {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+/* Slot layer: an overlay with the same grid; only its controls take pointer input. */
+.slot-layer {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  gap: 12px;
+  pointer-events: none;
+}
+.slot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+}
+.slot[hidden] {
+  display: none;
+}
+.slot.enlarged {
+  border-color: var(--accent);
+  z-index: 2;
+}
+.slot.menu-open {
+  z-index: 3;
+}
+.slot-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
+  pointer-events: auto;
+  background: var(--panel);
+  border-radius: 10px 10px 0 0;
+  flex-shrink: 0;
+}
+.slot-header-spacer {
+  flex: 1;
+  align-self: stretch;
+}
+.slot-app-picker {
+  padding: 2px 4px;
+  max-width: 60%;
+}
+.slot-icon {
+  font: inherit;
+  font-size: 13px;
+  width: 26px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--subdued);
+  cursor: pointer;
+}
+.slot-icon:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+.slot-menu {
+  position: absolute;
+  top: 32px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.slot-menu button {
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.slot-menu button:hover:not(:disabled) {
+  background: var(--panel);
+}
+.slot-menu button:disabled {
+  color: var(--subdued);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.slot-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--subdued);
+  background: var(--panel);
+  border-radius: 0 0 10px 10px;
+  font-size: 14px;
+}
+.slot-empty p {
+  margin: 2px;
+}
+.slot-empty-hint {
+  font-size: 12px;
+}
+
+/* Edit mode: slots become draggable boxes over a dimmed, inert content layer. */
+.layout-mode .stage:has(.slot-layer.editing) .pane-slot {
+  opacity: 0.35;
+}
+.layout-mode .stage:has(.slot-layer.editing) iframe {
+  pointer-events: none;
+}
+.slot-layer.editing .slot-edit {
+  pointer-events: auto;
+  border: 1px dashed var(--accent);
+  background: rgba(22, 27, 34, 0.72);
+  cursor: grab;
+  touch-action: none;
+}
+.slot-edit.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+.slot-grip {
+  color: var(--subdued);
+}
+.slot-size {
+  margin-left: auto;
+  color: var(--subdued);
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+}
+.slot-edit-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: var(--text);
+}
+.slot-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  border-right: 3px solid var(--accent);
+  border-bottom: 3px solid var(--accent);
+  border-radius: 0 0 6px 0;
+}
+.empty-cell {
+  pointer-events: auto;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--subdued);
+  font-size: 22px;
+  cursor: pointer;
+}
+.empty-cell:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.slot-ghost {
+  border: 2px solid var(--success);
+  border-radius: 10px;
+  background: rgba(63, 185, 80, 0.12);
+  z-index: 4;
+}
+.slot-ghost.invalid {
+  border-color: var(--critical);
+  background: rgba(240, 80, 110, 0.12);
+}

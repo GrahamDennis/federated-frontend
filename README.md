@@ -171,6 +171,28 @@ catalog.
 > `https://google.com` refuses to be framed (`X-Frame-Options` / CSP
 > `frame-ancestors`); `igu=1` is Google's frameable embed endpoint.
 
+### Layouts: slot grids and predefined views
+
+The **Apps | Layouts** toggle in the nav switches to a second way to compose the
+workspace. It is aimed at cockpit-style displays and page-builder editors rather
+than a windowing system. A **view** is a fixed grid of cells carved into
+non-overlapping **slots**, and each slot shows one app:
+
+- **User mode.** Pick a view from the drop-down. Change what a slot shows from
+  its header drop-down (it swaps if that app is already in another slot).
+  Temporarily enlarge a slot over its neighbours (⋯ → Expand ◀▶▲▼) or maximize
+  it (⛶). "Reset view" discards ad-hoc changes.
+- **Edit mode** (✎ Edit layouts). Set the grid size, drag slots to move them,
+  drag the corner handle to resize, click `+` on an empty cell to add a slot, set
+  each slot's default app, and create, duplicate, rename, or delete views. Saved
+  views persist in localStorage.
+
+Apps stay kept-alive and are placed by `grid-area` only, so moving, swapping, or
+enlarging never reloads an iframe. The ⌘K palette and shared context span every
+visible slot. Deep link: `/?mode=layout&view=quad`. The design, and how it
+extends to an "app builder" with block instances and wired/derived expressions,
+is in [`docs/layouts.md`](docs/layouts.md).
+
 ## Plugin distribution & discovery
 
 The chrome hardcodes **no individual plugin**. It discovers what to host at boot
@@ -253,6 +275,11 @@ exercising the cross-origin channels rather than mocking them:
   ⌘K palette spanning both composed apps; Places standalone.
 - `tests/shortcuts.spec.ts` — ⌘K opens the palette and Escape closes it even while
   a cross-origin plugin iframe has focus (forwarded over the thread).
+- `tests/layout.spec.ts` — the pure slot model (no overlap, swap-on-assign,
+  enlarge covers neighbours) plus layout mode end-to-end: multiple apps in one
+  grid, shared context across slots, swapping/enlarging/maximizing without
+  reloading iframes, view switching + deep links, and authoring a view in edit
+  mode (add, drag, resize, save, persists across reload).
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.
