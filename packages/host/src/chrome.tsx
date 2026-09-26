@@ -17,6 +17,9 @@ import type {
 import type {AppDescriptor} from './apps';
 import {AppView} from './AppView';
 import {readWorkspaceFromUrl, writeWorkspaceToUrl} from './workspaceUrl';
+import {gridArea, type Rect} from './layout';
+import {LayoutBar, SlotLayer, gridTemplate} from './LayoutStage';
+import {useLayouts} from './useLayouts';
 
 /**
  * The host chrome's shared services. Plugin hosts get at these (via {@link useChrome})
@@ -66,6 +69,26 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
 
   const [activeAppId, setActiveAppId] = useState(initial.appId);
 
+  // Two ways to compose the workspace: `apps` (one primary app, optionally with a
+  // docked detail companion) or `layout` (a grid of slots from a saved view).
+  const [mode, setMode] = useState(initial.mode);
+  const layouts = useLayouts(initial.viewId);
+  const layoutMode = mode === 'layout';
+
+  // Where each app is drawn in layout mode (apps under an enlarged slot, or in no
+  // slot at all, are absent — they stay alive but hidden).
+  const layoutPlacements = useMemo(() => {
+    const placements = new Map<string, Rect>();
+    if (!layoutMode) return placements;
+    for (const r of layouts.resolved) {
+      if (r.covered || !r.slot.appId) continue;
+      if (apps.some((app) => app.id === r.slot.appId)) {
+        placements.set(r.slot.appId, r.rect);
+      }
+    }
+    return placements;
+  }, [layoutMode, layouts.resolved, apps]);
+
   // Apps that stay mounted (alive) even when not visible, kept in
   // most-recently-used order (front = most recent). Keeping this ordered makes a
   // future eviction policy easy to add: cap the number of backgrounded apps
@@ -83,6 +106,8 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
 
   const activateApp = useCallback(
     (id: string) => {
+      // Foregrounding a single app is an apps-mode concept.
+      setMode('apps');
       setActiveAppId(id);
       setAliveAppIds((prev) => [
         id,
@@ -98,6 +123,16 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     },
     [apps],
   );
+
+  // Apps shown in layout slots join the kept-alive set (so switching views or
+  // modes doesn't reload them).
+  useEffect(() => {
+    if (layoutPlacements.size === 0) return;
+    setAliveAppIds((prev) => {
+      const added = [...layoutPlacements.keys()].filter((id) => !prev.includes(id));
+      return added.length ? [...prev, ...added] : prev;
+    });
+  }, [layoutPlacements]);
 
   const openDetail = useCallback((id: string) => {
     setDetailAppId(id);
@@ -166,9 +201,13 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // The palette spans the apps currently in the foreground — the primary app and
   // the open detail companion — so a composed workspace has one unified command
   // surface. Backgrounded apps stay alive but their commands aren't surfaced.
+  // In layout mode, that's every app currently visible in a slot.
   const visibleAppIds = useMemo(
-    () => [activeAppId, detailAppId].filter((id): id is string => Boolean(id)),
-    [activeAppId, detailAppId],
+    () =>
+      layoutMode
+        ? [...layoutPlacements.keys()]
+        : [activeAppId, detailAppId].filter((id): id is string => Boolean(id)),
+    [layoutMode, layoutPlacements, activeAppId, detailAppId],
   );
   const activeCommands = useMemo(
     () => visibleAppIds.flatMap((id) => commandsByPlugin.get(id) ?? []),
@@ -207,8 +246,10 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       appId: activeAppId,
       detailId: detailAppId,
       context: sharedContextRef.current,
+      mode,
+      viewId: layouts.activeViewId,
     });
-  }, [apps, activeAppId, detailAppId, contextVersion]);
+  }, [apps, activeAppId, detailAppId, contextVersion, mode, layouts.activeViewId]);
 
   const value = useMemo<ChromeContextValue>(
     () => ({
@@ -241,13 +282,32 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
 
   return (
     <ChromeContext.Provider value={value}>
-      <div className="chrome">
+      <div className={`chrome${layoutMode ? ' layout-mode' : ''}`}>
         <header className="nav">
           <div className="brand">▦ Federated Frontend</div>
+          <div className="mode-toggle" role="group" aria-label="Workspace mode">
+            <button
+              className={!layoutMode ? 'active' : ''}
+              aria-pressed={!layoutMode}
+              onClick={() => {
+                layouts.cancelEditing();
+                setMode('apps');
+              }}
+            >
+              Apps
+            </button>
+            <button
+              className={layoutMode ? 'active' : ''}
+              aria-pressed={layoutMode}
+              onClick={() => setMode('layout')}
+            >
+              Layouts
+            </button>
+          </div>
           {/* Plugins portal toolbar sections into this slot. */}
           <div className="toolbar-slot" ref={setToolbarSlot} />
           {/* Toggles to dock a subordinate "detail" companion of the active app. */}
-          {activeApp?.detailApps?.map((detailId) => {
+          {!layoutMode && activeApp?.detailApps?.map((detailId) => {
             const companion = apps.find((app) => app.id === detailId);
             if (!companion) return null;
             const open = detailAppId === detailId;
@@ -267,7 +327,8 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
         </header>
 
         <div className="body">
-          <nav className="app-rail">
+          {/* Hidden (not unmounted) in layout mode so the tree shape is stable. */}
+          <nav className="app-rail" hidden={layoutMode}>
             <div className="app-rail-heading">Apps</div>
             {/* Companion (detail-only) apps are opened from the active app, not the rail. */}
             {apps
@@ -290,34 +351,59 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
           </nav>
 
           <main className="content">
+            {layoutMode && <LayoutBar layouts={layouts} />}
             {/*
               Every activated app stays mounted (kept alive) and is positioned by
-              CSS into the primary pane, the docked detail pane, or hidden — purely
-              via a class, never reparented, so iframes/threads/state survive both
-              switches and detail open/close. AppView renders contributions for any
-              visible app (primary or detail), so the foreground composition drives
-              the chrome.
+              CSS — into the primary pane, the docked detail pane, a layout slot,
+              or hidden — purely via class/style, never reparented, so
+              iframes/threads/state survive app switches, detail open/close, view
+              switches, slot swaps and enlargements. AppView renders contributions
+              for any visible app, so the foreground composition drives the chrome.
+
+              In layout mode the host-owned slot chrome (headers, pickers, edit
+              handles) is a separate overlay sharing the same grid (SlotLayer).
             */}
-            <div className={`panes${detailAppId ? ' has-detail' : ''}`}>
-              {apps
-                .filter((app) => aliveAppIds.includes(app.id))
-                .map((app) => {
-                  const role =
-                    app.id === activeAppId
-                      ? 'primary'
-                      : app.id === detailAppId
-                        ? 'detail'
-                        : 'hidden';
-                  return (
-                    <section key={app.id} className={`pane pane-${role}`}>
-                      <AppView
-                        app={app}
-                        active={role !== 'hidden'}
-                        subordinate={role === 'detail'}
-                      />
-                    </section>
-                  );
-                })}
+            <div className="stage">
+              <div
+                className={`panes${layoutMode ? ' layout-grid' : detailAppId ? ' has-detail' : ''}`}
+                style={
+                  layoutMode
+                    ? gridTemplate(layouts.view.cols, layouts.view.rows)
+                    : undefined
+                }
+              >
+                {apps
+                  .filter(
+                    (app) =>
+                      aliveAppIds.includes(app.id) || layoutPlacements.has(app.id),
+                  )
+                  .map((app) => {
+                    const rect = layoutPlacements.get(app.id);
+                    const role = layoutMode
+                      ? rect
+                        ? 'slot'
+                        : 'hidden'
+                      : app.id === activeAppId
+                        ? 'primary'
+                        : app.id === detailAppId
+                          ? 'detail'
+                          : 'hidden';
+                    return (
+                      <section
+                        key={app.id}
+                        className={`pane pane-${role}`}
+                        style={rect ? {gridArea: gridArea(rect)} : undefined}
+                      >
+                        <AppView
+                          app={app}
+                          active={role !== 'hidden'}
+                          subordinate={role === 'detail'}
+                        />
+                      </section>
+                    );
+                  })}
+              </div>
+              {layoutMode && <SlotLayer layouts={layouts} apps={apps} />}
             </div>
           </main>
         </div>
