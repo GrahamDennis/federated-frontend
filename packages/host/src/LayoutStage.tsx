@@ -2,7 +2,7 @@ import {useRef, useState} from 'preact/hooks';
 import type {PortDescriptor, SettingDescriptor, SettingValue} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
 import {exprScope, instanceFor, knownInstances, type Instance} from './instances';
-import {FUNCTIONS, IDIOMS, checkExpr, type ExprScope} from './expressions';
+import {FUNCTIONS, IDIOMS, checkExpr, type ExprScope} from '@ff/layout-model';
 import {
   MAX_GRID,
   addSlot,
@@ -19,7 +19,7 @@ import {
   type Direction,
   type Rect,
   type ResolvedSlot,
-} from './layout';
+} from '@ff/layout-model';
 import type {Layouts} from './useLayouts';
 
 /** Must match `--layout-gap` in styles.css (used to map pointer → cell). */
@@ -41,9 +41,34 @@ export function gridTemplate(cols: number, rows: number) {
 export function LayoutBar({layouts}: {layouts: Layouts}) {
   const {view, editing} = layouts;
 
+  if (!layouts.ready) {
+    return (
+      <div className="layout-bar">
+        <span className="layout-bar-mode">Loading layouts…</span>
+      </div>
+    );
+  }
+
   if (!editing) {
     return (
       <div className="layout-bar">
+        <SourceBadge layouts={layouts} />
+        {layouts.source === 'service' && (
+          <label className="layout-field">
+            Role
+            <select
+              aria-label="Role"
+              value={layouts.role ?? ''}
+              onChange={(e) => layouts.setRole(e.currentTarget.value)}
+            >
+              {layouts.roles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="layout-field">
           View
           <select
@@ -64,9 +89,11 @@ export function LayoutBar({layouts}: {layouts: Layouts}) {
           </button>
         )}
         <span className="layout-bar-spacer" />
-        <button className="btn" onClick={layouts.startEditing}>
-          ✎ Edit layouts
-        </button>
+        {layouts.canEdit && layouts.views.length > 0 && (
+          <button className="btn" onClick={layouts.startEditing}>
+            ✎ Edit layouts
+          </button>
+        )}
       </div>
     );
   }
@@ -128,10 +155,60 @@ export function LayoutBar({layouts}: {layouts: Layouts}) {
       <button className="btn" onClick={layouts.cancelEditing}>
         Cancel
       </button>
-      <button className="btn btn-primary" onClick={layouts.saveDraft}>
-        Save view
+      <button className="btn btn-primary" onClick={layouts.saveDraft} disabled={layouts.saving}>
+        {layouts.saving ? 'Saving…' : 'Save view'}
       </button>
+      {layouts.source === 'service' && (
+        <div className="layout-visibility" role="group" aria-label="Visible to">
+          <span>Visible to</span>
+          {layouts.roles
+            .filter((r) => !r.canEdit)
+            .map((r) => {
+              const on = view.roles?.includes(r.id) ?? false;
+              return (
+                <label key={r.id} className="layout-check">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() =>
+                      layouts.setViewRoles(
+                        on ? (view.roles ?? []).filter((id) => id !== r.id) : [...(view.roles ?? []), r.id],
+                      )
+                    }
+                  />
+                  {r.label}
+                </label>
+              );
+            })}
+          <small>(editors see every view)</small>
+        </div>
+      )}
+      {layouts.saveErrors.length > 0 && (
+        <ul className="layout-errors" role="alert" aria-label="Save errors">
+          {layouts.saveErrors.map((e, i) => (
+            <li key={i}>
+              {e.path && <code>{e.path}</code>} {e.message}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
+  );
+}
+
+/** Where layouts are coming from: the service (shared, per role) or this browser. */
+function SourceBadge({layouts}: {layouts: Layouts}) {
+  return layouts.source === 'service' ? (
+    <span className="source-badge service" title="Layouts are served by the layout service">
+      ● Shared
+    </span>
+  ) : (
+    <span
+      className="source-badge local"
+      title="The layout service isn’t reachable; layouts are saved in this browser only"
+    >
+      ○ Local only
+    </span>
   );
 }
 

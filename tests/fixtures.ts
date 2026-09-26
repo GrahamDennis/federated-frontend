@@ -13,6 +13,16 @@ import {
  * gate.
  */
 export const test = base.extend<{connectedPage: Page}>({
+  // Each test gets its own layout-service workspace, so tests that save
+  // layouts can't see each other's changes (tests run in parallel against one
+  // service). The host reads it from localStorage on every page load.
+  page: async ({page}, use, testInfo) => {
+    const workspace = `t${testInfo.testId}-${testInfo.repeatEachIndex}-${testInfo.retry}`
+      .replace(/[^A-Za-z0-9_-]/g, '-')
+      .slice(0, 64);
+    await page.addInitScript((ws) => localStorage.setItem('ff.workspace', ws), workspace);
+    await use(page);
+  },
   connectedPage: async ({page}, use) => {
     await page.goto('/');
     await expect(

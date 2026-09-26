@@ -22,7 +22,7 @@ import type {
 import type {AppDescriptor} from './apps';
 import {AppView} from './AppView';
 import {readWorkspaceFromUrl, writeWorkspaceToUrl} from './workspaceUrl';
-import {gridArea, resolveInputs, type Rect} from './layout';
+import {gridArea, resolveInputs, type Rect} from '@ff/layout-model';
 import {useInstanceFeed} from './instanceFeed';
 import {LayoutBar, SlotLayer, gridTemplate} from './LayoutStage';
 import {useLayouts} from './useLayouts';
@@ -103,7 +103,9 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // slot, or in no slot at all, are absent — they stay alive but hidden.
   const layoutPlacements = useMemo(() => {
     const placements = new Map<string, Rect>();
-    if (!layoutMode) return placements;
+    // Nothing is placed until the layouts have loaded (service or local), so
+    // no plugin mounts for a view the role can't actually see.
+    if (!layoutMode || !layouts.ready) return placements;
     for (const r of layouts.resolved) {
       if (r.covered || !r.slot.blockId) continue;
       if (instanceFor(layouts.blocks, r.slot.blockId, apps)) {
@@ -111,7 +113,7 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       }
     }
     return placements;
-  }, [layoutMode, layouts.resolved, layouts.blocks, apps]);
+  }, [layoutMode, layouts.ready, layouts.resolved, layouts.blocks, apps]);
 
   // Instances that stay mounted (alive) even when not visible, kept in
   // most-recently-used order (front = most recent). Keeping this ordered makes a
@@ -377,9 +379,10 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       detailId: detailAppId,
       context: sharedContextRef.current,
       mode,
-      viewId: layouts.activeViewId,
+      // Until layouts load, keep whatever view the URL asked for.
+      viewId: layouts.ready ? layouts.activeViewId : initial.viewId,
     });
-  }, [apps, activeAppId, detailAppId, contextVersion, mode, layouts.activeViewId]);
+  }, [apps, activeAppId, detailAppId, contextVersion, mode, layouts.ready, layouts.activeViewId, initial.viewId]);
 
   const value = useMemo<ChromeContextValue>(
     () => ({

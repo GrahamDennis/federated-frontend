@@ -6,8 +6,8 @@ import {
   referencedOutputs,
   toIdentifier,
   type ExprScope,
-} from '../packages/host/src/expressions';
-import {DEFAULT_VIEWS, resolveInputs} from '../packages/host/src/layout';
+} from '../packages/layout-model/src/expressions';
+import {DEFAULT_VIEWS, resolveInputs} from '../packages/layout-model/src/layout';
 
 const tokyo = {id: 'tokyo', name: 'Tokyo', latitude: 35.69, longitude: 139.69, zoom: 9};
 const osaka = {id: 'osaka', name: 'Osaka', latitude: 34.69, longitude: 135.5};

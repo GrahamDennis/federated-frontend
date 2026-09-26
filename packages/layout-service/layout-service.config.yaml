@@ -1,0 +1,30 @@
+# @ff/layout-service configuration.
+#
+# Roles are a PROTOTYPE stand-in for identity: the host sends the chosen role in
+# an `X-FF-Role` header, and nothing authenticates it. A real deployment would
+# derive the role from an authenticated session (OIDC claims, etc.).
+
+# Where to discover plugins. Their typed ports are needed to validate wiring
+# and CEL expressions on save.
+registry: http://localhost:5180
+
+# Workspaces' layouts are persisted as one JSON file each under this directory
+# (relative to this package). Set FF_LAYOUT_EPHEMERAL=1 to keep them in memory.
+dataDir: .data
+
+defaultRole: admin
+roles:
+  admin: {label: Administrator, canEdit: true}
+  pilot: {label: Pilot}
+  analyst: {label: Analyst}
+
+# Which roles may use each default view when a workspace is first created.
+# Editors always see every view.
+seedViewRoles:
+  nav-detail: [pilot, analyst]
+  quad: [analyst]
+  portals: [pilot]
+  two-maps: [pilot]
+  explorer: [analyst]
+  nearby: [analyst]
+  actions: [pilot, analyst]

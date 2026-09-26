@@ -7,16 +7,17 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n host,registry,notes,map,places,histogram,actions -c cyan,blue,magenta,green,yellow,red,white \"npm:dev:host\" \"npm:dev:registry\" \"npm:dev:plugin\" \"npm:dev:map\" \"npm:dev:places\" \"npm:dev:histogram\" \"npm:dev:actions\"",
+    "dev": "concurrently -n host,registry,layouts,notes,map,places,histogram,actions -c cyan,blue,gray,magenta,green,yellow,red,white \"npm:dev:host\" \"npm:dev:registry\" \"npm:dev:layouts\" \"npm:dev:plugin\" \"npm:dev:map\" \"npm:dev:places\" \"npm:dev:histogram\" \"npm:dev:actions\"",
     "dev:host": "npm run dev -w @ff/host",
     "dev:registry": "npm run dev -w @ff/plugin-registry",
+    "dev:layouts": "npm run dev -w @ff/layout-service",
     "dev:plugin": "npm run dev -w @ff/plugin-example",
     "dev:map": "npm run dev -w @ff/plugin-map",
     "dev:places": "npm run dev -w @ff/plugin-places",
     "dev:histogram": "npm run dev -w @ff/plugin-histogram",
     "dev:actions": "npm run dev -w @ff/plugin-actions",
     "build": "npm run build -w @ff/protocol && npm run build -w @ff/host && npm run build -w @ff/plugin-example && npm run build -w @ff/plugin-map && npm run build -w @ff/plugin-places && npm run build -w @ff/plugin-histogram && npm run build -w @ff/plugin-actions",
-    "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p packages/plugin-sdk-react/tsconfig.json && tsc --noEmit -p packages/host/tsconfig.json && tsc --noEmit -p packages/plugin-example/tsconfig.json && tsc --noEmit -p packages/plugin-map/tsconfig.json && tsc --noEmit -p packages/plugin-places/tsconfig.json && tsc --noEmit -p packages/plugin-histogram/tsconfig.json && tsc --noEmit -p packages/plugin-actions/tsconfig.json && tsc --noEmit -p packages/plugin-registry/tsconfig.json",
+    "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p packages/layout-model/tsconfig.json && tsc --noEmit -p packages/layout-service/tsconfig.json && tsc --noEmit -p packages/plugin-sdk-react/tsconfig.json && tsc --noEmit -p packages/host/tsconfig.json && tsc --noEmit -p packages/plugin-example/tsconfig.json && tsc --noEmit -p packages/plugin-map/tsconfig.json && tsc --noEmit -p packages/plugin-places/tsconfig.json && tsc --noEmit -p packages/plugin-histogram/tsconfig.json && tsc --noEmit -p packages/plugin-actions/tsconfig.json && tsc --noEmit -p packages/plugin-registry/tsconfig.json",
     "test": "playwright test",
     "test:ui": "playwright test --ui"
   },
