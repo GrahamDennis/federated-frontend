@@ -81,6 +81,67 @@ export interface HostApi {
   subscribeContext(
     listener: (context: SharedContext) => void,
   ): Promise<() => void>;
+
+  /**
+   * Which block (instance) of the plugin this is. The host can run several
+   * instances of one plugin side by side (e.g. an overview map and a detail map),
+   * each in its own iframe with its own settings.
+   */
+  getInstance(): Promise<InstanceInfo>;
+  /**
+   * This instance's settings: the values the layout author chose, merged over
+   * the defaults the plugin declared in its manifest (`ff-plugin.json#settings`).
+   */
+  getSettings(): Promise<BlockSettings>;
+  /** Subscribe to this instance's settings changing (e.g. live, while authoring). */
+  subscribeSettings(
+    listener: (settings: BlockSettings) => void,
+  ): Promise<() => void>;
+}
+
+/** Identifies one running instance ("block") of a plugin. */
+export interface InstanceInfo {
+  /** Unique per instance. The default instance of an app uses the app id. */
+  instanceId: string;
+  appId: string;
+  /** Human label for this instance, e.g. "Overview map". */
+  label: string;
+}
+
+export type SettingValue = string | number | boolean;
+export type BlockSettings = Record<string, SettingValue>;
+
+/**
+ * One configurable setting a plugin declares in its manifest. The host renders
+ * a form control for it while authoring a layout; the plugin just reads values.
+ * Deliberately tiny: enough for a prototype app builder, easy to map onto JSON
+ * Schema later.
+ */
+export type SettingDescriptor = {label: string; description?: string} & (
+  | {type: 'string'; default?: string}
+  | {type: 'number'; default?: number; min?: number; max?: number; step?: number}
+  | {type: 'boolean'; default?: boolean}
+  | {
+      type: 'select';
+      default?: string;
+      options: {value: string; label: string}[];
+    }
+);
+
+/** A plugin's settings schema, keyed by setting name. */
+export type SettingsSchema = Record<string, SettingDescriptor>;
+
+/** Defaults from a schema, with `values` layered over them (unknown keys dropped). */
+export function resolveSettings(
+  schema: SettingsSchema | undefined,
+  values: BlockSettings | undefined,
+): BlockSettings {
+  const resolved: BlockSettings = {};
+  for (const [key, descriptor] of Object.entries(schema ?? {})) {
+    const value = values?.[key] ?? descriptor.default;
+    if (value !== undefined) resolved[key] = value;
+  }
+  return resolved;
 }
 
 /**

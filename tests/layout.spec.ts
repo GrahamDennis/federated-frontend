@@ -3,7 +3,8 @@ import {test} from './fixtures';
 import {
   DEFAULT_VIEWS,
   addSlot,
-  assignApp,
+  assignBlock,
+  newBlockId,
   canPlace,
   growRect,
   placeSlot,
@@ -44,9 +45,9 @@ test.describe('layout model (pure)', () => {
   });
 
   test('assigning an app already in another slot swaps them', () => {
-    const next = assignApp(quad, 's1', 'places');
-    expect(next.slots.find((s) => s.id === 's1')!.appId).toBe('places');
-    expect(next.slots.find((s) => s.id === 's2')!.appId).toBe('world-map');
+    const next = assignBlock(quad, 's1', 'places');
+    expect(next.slots.find((s) => s.id === 's1')!.blockId).toBe('places');
+    expect(next.slots.find((s) => s.id === 's2')!.blockId).toBe('world-map');
   });
 
   test('enlarging covers the neighbour; growth is bounded by the grid', () => {
@@ -54,6 +55,10 @@ test.describe('layout model (pure)', () => {
     const resolved = resolveSlots(quad, {slotId: 's1', rect});
     expect(resolved.map((r) => r.covered)).toEqual([false, true, false, false]);
     expect(growRect(quad, quad.slots[0], 'left')).toBeNull();
+  });
+
+  test('new block ids never collide', () => {
+    expect(newBlockId('world-map', ['world-map', 'world-map~2'])).toBe('world-map~3');
   });
 
   test('adding slots and shrinking the grid', () => {
@@ -101,9 +106,9 @@ test.describe('layout mode', () => {
   }) => {
     await markFrame(page, 'world-map');
     await markFrame(page, 'places');
-    await page.getByLabel('App in slot s2').selectOption('world-map');
+    await page.getByLabel('Block in slot s2').selectOption('world-map');
 
-    await expect(page.getByLabel('App in slot s1')).toHaveValue('places');
+    await expect(page.getByLabel('Block in slot s1')).toHaveValue('places');
     const map = await pane(page, 'world-map').boundingBox();
     const places = await pane(page, 'places').boundingBox();
     expect(places!.width).toBeGreaterThan(map!.width * 1.5);
@@ -112,7 +117,7 @@ test.describe('layout mode', () => {
 
     // Ad-hoc changes are resettable back to the saved view.
     await page.getByRole('button', {name: 'Reset view'}).click();
-    await expect(page.getByLabel('App in slot s1')).toHaveValue('world-map');
+    await expect(page.getByLabel('Block in slot s1')).toHaveValue('world-map');
   });
 
   test('maximize takes over the grid; restore brings the others back', async ({
@@ -167,7 +172,7 @@ test.describe('layout mode', () => {
     await expect(page.locator('.empty-cell')).toHaveCount(6);
     await page.getByLabel('Add slot at column 1, row 1').click();
     await expect(page.locator('.slot-edit')).toHaveCount(1);
-    await page.getByLabel('Default app for slot s1').selectOption('world-map');
+    await page.getByLabel('Block for slot s1').selectOption('world-map');
 
     // Drag the slot one cell right.
     const box = (await page.locator('.slot-edit').boundingBox())!;

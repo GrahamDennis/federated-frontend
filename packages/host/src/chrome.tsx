@@ -8,7 +8,9 @@ import {
   useState,
 } from 'preact/hooks';
 import type {
+  BlockSettings,
   CommandDescriptor,
+  InstanceInfo,
   ForwardedKeyEvent,
   SharedContext,
   ToastOptions,
@@ -20,6 +22,7 @@ import {readWorkspaceFromUrl, writeWorkspaceToUrl} from './workspaceUrl';
 import {gridArea, type Rect} from './layout';
 import {LayoutBar, SlotLayer, gridTemplate} from './LayoutStage';
 import {useLayouts} from './useLayouts';
+import {instanceFor, type Instance} from './instances';
 
 /**
  * The host chrome's shared services. Plugin hosts get at these (via {@link useChrome})
@@ -28,8 +31,15 @@ import {useLayouts} from './useLayouts';
  */
 interface ChromeContextValue {
   toast(message: string, options?: ToastOptions): void;
-  /** Replace the command-palette entries contributed by one plugin. */
-  setCommandsForPlugin(pluginId: string, commands: CommandDescriptor[]): void;
+  /** Replace the command-palette entries contributed by one plugin instance. */
+  setCommandsForInstance(instanceId: string, commands: CommandDescriptor[]): void;
+  /** Which block a plugin instance is, and its (live) resolved settings. */
+  getInstanceInfo(instanceId: string): InstanceInfo;
+  getInstanceSettings(instanceId: string): BlockSettings;
+  subscribeInstanceSettings(
+    instanceId: string,
+    listener: (settings: BlockSettings) => void,
+  ): () => void;
   /** All registered apps (so a plugin can be offered its siblings). */
   apps: AppDescriptor[];
   /** Bring an app to the foreground. */
@@ -75,24 +85,27 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   const layouts = useLayouts(initial.viewId);
   const layoutMode = mode === 'layout';
 
-  // Where each app is drawn in layout mode (apps under an enlarged slot, or in no
-  // slot at all, are absent — they stay alive but hidden).
+  // Where each instance (block) is drawn in layout mode. Ones under an enlarged
+  // slot, or in no slot at all, are absent — they stay alive but hidden.
   const layoutPlacements = useMemo(() => {
     const placements = new Map<string, Rect>();
     if (!layoutMode) return placements;
     for (const r of layouts.resolved) {
-      if (r.covered || !r.slot.appId) continue;
-      if (apps.some((app) => app.id === r.slot.appId)) {
-        placements.set(r.slot.appId, r.rect);
+      if (r.covered || !r.slot.blockId) continue;
+      if (instanceFor(layouts.blocks, r.slot.blockId, apps)) {
+        placements.set(r.slot.blockId, r.rect);
       }
     }
     return placements;
-  }, [layoutMode, layouts.resolved, apps]);
+  }, [layoutMode, layouts.resolved, layouts.blocks, apps]);
 
-  // Apps that stay mounted (alive) even when not visible, kept in
+  // Instances that stay mounted (alive) even when not visible, kept in
   // most-recently-used order (front = most recent). Keeping this ordered makes a
-  // future eviction policy easy to add: cap the number of backgrounded apps
+  // future eviction policy easy to add: cap the number of backgrounded instances
   // and/or drop ones that have been backgrounded past some timeout.
+  //
+  // An instance id is a block id; apps mode shows each app's default block, whose
+  // id is the app id — so in apps mode these are just app ids.
   const [aliveAppIds, setAliveAppIds] = useState<string[]>(() => {
     const ids = initial.appId ? [initial.appId] : [];
     if (initial.detailId) ids.push(initial.detailId);
@@ -124,8 +137,8 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     [apps],
   );
 
-  // Apps shown in layout slots join the kept-alive set (so switching views or
-  // modes doesn't reload them).
+  // Instances shown in layout slots join the kept-alive set (so switching views
+  // or modes doesn't reload them).
   useEffect(() => {
     if (layoutPlacements.size === 0) return;
     setAliveAppIds((prev) => {
@@ -166,9 +179,9 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   );
 
   const [toasts, setToasts] = useState<Toast[]>([]);
-  // Commands are keyed by the contributing plugin so a plugin reloading or
-  // unmounting can cleanly replace/remove just its own entries.
-  const [commandsByPlugin, setCommandsByPlugin] = useState<
+  // Commands are keyed by the contributing plugin instance so an instance
+  // reloading or unmounting can cleanly replace/remove just its own entries.
+  const [commandsByInstance, setCommandsByInstance] = useState<
     Map<string, CommandDescriptor[]>
   >(new Map());
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -186,14 +199,68 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     }, duration);
   }, []);
 
-  const setCommandsForPlugin = useCallback(
-    (pluginId: string, commands: CommandDescriptor[]) => {
-      setCommandsByPlugin((current) => {
+  const setCommandsForInstance = useCallback(
+    (instanceId: string, commands: CommandDescriptor[]) => {
+      setCommandsByInstance((current) => {
         const next = new Map(current);
-        if (commands.length === 0) next.delete(pluginId);
-        else next.set(pluginId, commands);
+        if (commands.length === 0) next.delete(instanceId);
+        else next.set(instanceId, commands);
         return next;
       });
+    },
+    [],
+  );
+
+  // The mounted instances. Each is rendered in first-mounted order (append-only)
+  // so that adding one never moves an existing iframe in the DOM (which would
+  // reload it); the MRU order above is only for bookkeeping.
+  const mountOrder = useRef<string[]>([]);
+  for (const id of [...aliveAppIds, ...layoutPlacements.keys()]) {
+    if (!mountOrder.current.includes(id)) mountOrder.current.push(id);
+  }
+  const mounted: Instance[] = mountOrder.current
+    .filter((id) => aliveAppIds.includes(id) || layoutPlacements.has(id))
+    .map((id) => instanceFor(layouts.blocks, id, apps))
+    .filter((i): i is Instance => i !== null);
+
+  // Per-instance settings broker: plugins read their settings synchronously from
+  // the latest render and are pushed changes (e.g. live while authoring).
+  const instancesRef = useRef(new Map<string, Instance>());
+  instancesRef.current = new Map(mounted.map((i) => [i.id, i]));
+  const settingsSubscribers = useRef(
+    new Map<string, Set<(settings: BlockSettings) => void>>(),
+  );
+  const lastSettings = useRef(new Map<string, string>());
+  useEffect(() => {
+    for (const instance of mounted) {
+      const json = JSON.stringify(instance.settings);
+      if (lastSettings.current.get(instance.id) === json) continue;
+      lastSettings.current.set(instance.id, json);
+      for (const listener of settingsSubscribers.current.get(instance.id) ?? []) {
+        listener(instance.settings);
+      }
+    }
+  });
+  const getInstanceInfo = useCallback((instanceId: string): InstanceInfo => {
+    const instance = instancesRef.current.get(instanceId);
+    return {
+      instanceId,
+      appId: instance?.app.id ?? instanceId,
+      label: instance?.label ?? instanceId,
+    };
+  }, []);
+  const getInstanceSettings = useCallback(
+    (instanceId: string) => instancesRef.current.get(instanceId)?.settings ?? {},
+    [],
+  );
+  const subscribeInstanceSettings = useCallback(
+    (instanceId: string, listener: (settings: BlockSettings) => void) => {
+      const listeners = settingsSubscribers.current.get(instanceId) ?? new Set();
+      listeners.add(listener);
+      settingsSubscribers.current.set(instanceId, listeners);
+      return () => {
+        listeners.delete(listener);
+      };
     },
     [],
   );
@@ -209,10 +276,23 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
         : [activeAppId, detailAppId].filter((id): id is string => Boolean(id)),
     [layoutMode, layoutPlacements, activeAppId, detailAppId],
   );
-  const activeCommands = useMemo(
-    () => visibleAppIds.flatMap((id) => commandsByPlugin.get(id) ?? []),
-    [commandsByPlugin, visibleAppIds],
-  );
+  // When several instances of one app are visible, their commands would read
+  // identically, so each is tagged with its instance's label.
+  const activeCommands = useMemo(() => {
+    const visible = mounted.filter((i) => visibleAppIds.includes(i.id));
+    return visible.flatMap((instance) => {
+      const ambiguous = visible.some(
+        (other) => other !== instance && other.app.id === instance.app.id,
+      );
+      return (commandsByInstance.get(instance.id) ?? []).map((command) => ({
+        ...command,
+        id: `${instance.id}:${command.id}`,
+        subtitle: ambiguous
+          ? `${instance.label}${command.subtitle ? ` · ${command.subtitle}` : ''}`
+          : command.subtitle,
+      }));
+    });
+  }, [commandsByInstance, visibleAppIds, mounted]);
 
   // Global shortcut handling. Used both by the host's own window keydown and by
   // shortcuts forwarded from focused plugin iframes (which the host can't observe
@@ -254,7 +334,10 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   const value = useMemo<ChromeContextValue>(
     () => ({
       toast,
-      setCommandsForPlugin,
+      setCommandsForInstance,
+      getInstanceInfo,
+      getInstanceSettings,
+      subscribeInstanceSettings,
       apps,
       activateApp,
       getSharedContext,
@@ -266,7 +349,10 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     }),
     [
       toast,
-      setCommandsForPlugin,
+      setCommandsForInstance,
+      getInstanceInfo,
+      getInstanceSettings,
+      subscribeInstanceSettings,
       apps,
       activateApp,
       getSharedContext,
@@ -372,36 +458,31 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
                     : undefined
                 }
               >
-                {apps
-                  .filter(
-                    (app) =>
-                      aliveAppIds.includes(app.id) || layoutPlacements.has(app.id),
-                  )
-                  .map((app) => {
-                    const rect = layoutPlacements.get(app.id);
-                    const role = layoutMode
-                      ? rect
-                        ? 'slot'
-                        : 'hidden'
-                      : app.id === activeAppId
-                        ? 'primary'
-                        : app.id === detailAppId
-                          ? 'detail'
-                          : 'hidden';
-                    return (
-                      <section
-                        key={app.id}
-                        className={`pane pane-${role}`}
-                        style={rect ? {gridArea: gridArea(rect)} : undefined}
-                      >
-                        <AppView
-                          app={app}
-                          active={role !== 'hidden'}
-                          subordinate={role === 'detail'}
-                        />
-                      </section>
-                    );
-                  })}
+                {mounted.map((instance) => {
+                  const rect = layoutPlacements.get(instance.id);
+                  const role = layoutMode
+                    ? rect
+                      ? 'slot'
+                      : 'hidden'
+                    : instance.id === activeAppId
+                      ? 'primary'
+                      : instance.id === detailAppId
+                        ? 'detail'
+                        : 'hidden';
+                  return (
+                    <section
+                      key={instance.id}
+                      className={`pane pane-${role}`}
+                      style={rect ? {gridArea: gridArea(rect)} : undefined}
+                    >
+                      <AppView
+                        instance={instance}
+                        active={role !== 'hidden'}
+                        subordinate={role === 'detail'}
+                      />
+                    </section>
+                  );
+                })}
               </div>
               {layoutMode && <SlotLayer layouts={layouts} apps={apps} />}
             </div>

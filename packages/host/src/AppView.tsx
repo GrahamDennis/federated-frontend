@@ -1,4 +1,4 @@
-import type {AppDescriptor} from './apps';
+import type {Instance} from './instances';
 import {PluginHost} from './PluginHost';
 
 /**
@@ -11,19 +11,20 @@ import {PluginHost} from './PluginHost';
  * their contributed UI while active.
  */
 export function AppView({
-  app,
+  instance,
   active,
   subordinate = false,
 }: {
-  app: AppDescriptor;
+  instance: Instance;
   active: boolean;
   subordinate?: boolean;
 }) {
+  const {app} = instance;
   return (
     <section className={`app-card${subordinate ? ' subordinate' : ''}`}>
       <div className="app-titlebar">
         <span className={`app-dot ${app.kind}`} />
-        <span className="app-titlebar-name">{app.name}</span>
+        <span className="app-titlebar-name">{instance.label}</span>
         {!subordinate && (
           <span className="app-titlebar-origin">{new URL(app.src).origin}</span>
         )}
@@ -37,12 +38,17 @@ export function AppView({
       </div>
 
       {app.kind === 'plugin' ? (
-        <PluginHost pluginId={app.id} src={app.src} active={active} />
+        <PluginHost
+          instanceId={instance.id}
+          appId={app.id}
+          src={app.src}
+          active={active}
+        />
       ) : (
         <div className="app-frame">
           <iframe
             src={app.src}
-            title={app.id}
+            title={instance.id}
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
           />
         </div>

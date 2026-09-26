@@ -6,6 +6,7 @@
 // for plugins that render their own UI (e.g. the map and Places plugins) and
 // don't need the component kit / standalone chrome.
 export * from './connect';
+export * from './settings';
 export * from './platform';
 export {createHostedPlatform, RemoteContributions} from './hosted';
 export {createStandalonePlatform, StandaloneChrome} from './standalone';

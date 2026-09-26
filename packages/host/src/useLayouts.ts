@@ -1,73 +1,109 @@
 import {useCallback, useEffect, useMemo, useState} from 'preact/hooks';
+import type {BlockSettings} from '@ff/protocol';
 import {
+  DEFAULT_BLOCKS,
   DEFAULT_VIEWS,
-  assignApp,
+  assignBlock,
   fullRect,
   growRect,
   isFull,
+  newBlockId,
   rectOf,
   resolveSlots,
+  type Block,
+  type BlockRegistry,
   type Direction,
   type Enlargement,
   type LayoutView,
 } from './layout';
 
-const STORAGE_KEY = 'ff.layout-views.v1';
+const STORAGE_KEY = 'ff.layouts.v2';
+const LEGACY_STORAGE_KEY = 'ff.layout-views.v1';
+
+interface Stored {
+  views: LayoutView[];
+  blocks: BlockRegistry;
+}
+
+const DEFAULTS: Stored = {views: DEFAULT_VIEWS, blocks: DEFAULT_BLOCKS};
 
 /**
- * Saved views are the admin-authored definitions. In a real deployment they'd be
- * served (per role / per mission) by a backend; for the prototype they persist in
- * localStorage, seeded with {@link DEFAULT_VIEWS}.
+ * Saved views and blocks are the admin-authored definitions. In a real
+ * deployment they'd be served (per role / per mission) by a backend; for the
+ * prototype they persist in localStorage, seeded with the defaults.
  */
-function loadViews(): LayoutView[] {
+function load(): Stored {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as LayoutView[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      const parsed = JSON.parse(raw) as Stored;
+      if (Array.isArray(parsed.views) && parsed.views.length > 0) {
+        return {views: parsed.views, blocks: parsed.blocks ?? {}};
+      }
+    }
+    // v1 stored only views, with slots naming an app. The default block of an
+    // app has the app's id, so migrating is a field rename.
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy) {
+      const views = (JSON.parse(legacy) as LayoutView[]).map((view) => ({
+        ...view,
+        slots: view.slots.map(({appId, ...slot}: any) => ({...slot, blockId: appId ?? null})),
+      }));
+      const missing = DEFAULT_VIEWS.filter((d) => !views.some((v) => v.id === d.id));
+      return {views: [...views, ...missing], blocks: DEFAULT_BLOCKS};
     }
   } catch {
     // Storage unavailable or corrupt: fall back to the defaults.
   }
-  return DEFAULT_VIEWS;
+  return DEFAULTS;
 }
 
-function storeViews(views: LayoutView[]): void {
+function store(stored: Stored): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(views));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
   } catch {
-    // Non-fatal: the views just won't survive a reload.
+    // Non-fatal: the layouts just won't survive a reload.
   }
 }
 
+interface Draft {
+  view: LayoutView;
+  blocks: BlockRegistry;
+  /** A brand-new view (not yet in the saved views). */
+  isNew: boolean;
+}
+
 /**
- * All the layout-mode state: the saved views, which one is active, the user's
- * ad-hoc (unsaved) edits to each, a temporary enlargement, and the edit-mode draft.
+ * All the layout-mode state: the saved views and blocks, which view is active,
+ * the user's ad-hoc (unsaved) edits to each view, a temporary enlargement, and
+ * the edit-mode draft.
  *
  * Two tiers of change, mirroring "admin defines formats, operator adjusts them":
- * - **Edit mode** works on a `draft` copy of a view (geometry + default apps) and
- *   commits it to the saved views on Save.
- * - **User mode** changes (swapping a slot's app) go to a per-view `live` copy that
- *   is never saved; "Reset" drops it back to the saved definition. Enlargement is
- *   even more transient: it's cleared whenever the view changes.
+ * - **Edit mode** works on a `draft` copy of a view *and* the block registry
+ *   (geometry, which block each slot shows, block names and settings) and
+ *   commits both on Save.
+ * - **User mode** changes (swapping a slot's block) go to a per-view `live`
+ *   copy that is never saved; "Reset" drops it back to the saved definition.
+ *   Enlargement is even more transient: it's cleared whenever the view changes.
  */
 export function useLayouts(initialViewId: string | null) {
-  const [views, setViews] = useState<LayoutView[]>(loadViews);
+  const [saved, setSaved] = useState<Stored>(load);
+  const {views} = saved;
   const [activeViewId, setActiveViewId] = useState<string>(() =>
     views.some((v) => v.id === initialViewId) ? initialViewId! : views[0].id,
   );
   const [liveByView, setLiveByView] = useState<Record<string, LayoutView>>({});
   const [enlargement, setEnlargement] = useState<Enlargement | null>(null);
-  const [draft, setDraft] = useState<LayoutView | null>(null);
-  // Whether the draft is a brand-new view (not yet in `views`).
-  const [draftIsNew, setDraftIsNew] = useState(false);
+  const [draft, setDraft] = useState<Draft | null>(null);
 
-  useEffect(() => storeViews(views), [views]);
+  useEffect(() => store(saved), [saved]);
 
-  const saved = views.find((v) => v.id === activeViewId) ?? views[0];
-  const live = liveByView[saved.id] ?? saved;
+  const savedView = views.find((v) => v.id === activeViewId) ?? views[0];
+  const live = liveByView[savedView.id] ?? savedView;
   /** What's on screen: the draft while editing, else the live copy. */
-  const view = draft ?? live;
+  const view = draft?.view ?? live;
+  /** The block registry in effect (the draft's while editing). */
+  const blocks = draft?.blocks ?? saved.blocks;
   const resolved = useMemo(
     () => resolveSlots(view, draft ? null : enlargement),
     [view, draft, enlargement],
@@ -80,29 +116,78 @@ export function useLayouts(initialViewId: string | null) {
 
   const updateLive = useCallback(
     (fn: (v: LayoutView) => LayoutView) =>
-      setLiveByView((all) => ({...all, [saved.id]: fn(all[saved.id] ?? saved)})),
-    [saved],
+      setLiveByView((all) => ({
+        ...all,
+        [savedView.id]: fn(all[savedView.id] ?? savedView),
+      })),
+    [savedView],
   );
 
-  const setSlotApp = useCallback(
-    (slotId: string, appId: string | null) => {
-      if (draft) setDraft(assignApp(draft, slotId, appId));
-      else updateLive((v) => assignApp(v, slotId, appId));
+  /** Apply a view change to the draft (edit mode) or the live copy (user mode). */
+  const updateView = useCallback(
+    (fn: (v: LayoutView) => LayoutView) => {
+      if (draft) setDraft((d) => d && {...d, view: fn(d.view)});
+      else updateLive(fn);
     },
     [draft, updateLive],
   );
 
+  const setSlotBlock = useCallback(
+    (slotId: string, blockId: string | null) =>
+      updateView((v) => assignBlock(v, slotId, blockId)),
+    [updateView],
+  );
+
+  /** Create another instance of `appId` and show it in `slotId`. */
+  const createBlock = useCallback(
+    (slotId: string, appId: string, appName: string) => {
+      const ids = [...Object.keys(blocks), ...views.flatMap((v) => v.slots.map((s) => s.blockId ?? ''))];
+      const id = newBlockId(appId, ids);
+      const block: Block = {id, appId, label: `${appName} ${id.split('~')[1]}`};
+      // A new block is harmless until referenced, so in user mode it's added to
+      // the saved registry straight away (only the slot assignment is ad hoc).
+      if (draft) setDraft((d) => d && {...d, blocks: {...d.blocks, [id]: block}});
+      else setSaved((s) => ({...s, blocks: {...s.blocks, [id]: block}}));
+      updateView((v) => assignBlock(v, slotId, id));
+    },
+    [blocks, views, draft, updateView],
+  );
+
+  /** Edit a block's label/settings (edit mode only; takes effect live). */
+  const updateBlock = useCallback(
+    (base: Block, patch: {label?: string; settings?: BlockSettings}) => {
+      setDraft(
+        (d) =>
+          d && {
+            ...d,
+            blocks: {
+              ...d.blocks,
+              [base.id]: {
+                ...base,
+                ...(d.blocks[base.id] ?? {}),
+                ...(patch.label !== undefined ? {label: patch.label} : {}),
+                settings: {
+                  ...(d.blocks[base.id]?.settings ?? base.settings ?? {}),
+                  ...(patch.settings ?? {}),
+                },
+              },
+            },
+          },
+      );
+    },
+    [],
+  );
+
   const resetView = useCallback(() => {
-    setLiveByView(({[saved.id]: _dropped, ...rest}) => rest);
+    setLiveByView(({[savedView.id]: _dropped, ...rest}) => rest);
     setEnlargement(null);
-  }, [saved.id]);
+  }, [savedView.id]);
 
   const expandSlot = useCallback(
     (slotId: string, dir: Direction) => {
       const slot = view.slots.find((s) => s.id === slotId);
       if (!slot) return;
-      const from =
-        enlargement?.slotId === slotId ? enlargement.rect : rectOf(slot);
+      const from = enlargement?.slotId === slotId ? enlargement.rect : rectOf(slot);
       const rect = growRect(view, from, dir);
       if (rect) setEnlargement({slotId, rect});
     },
@@ -111,8 +196,7 @@ export function useLayouts(initialViewId: string | null) {
 
   const toggleMaximize = useCallback(
     (slotId: string) => {
-      const maximized =
-        enlargement?.slotId === slotId && isFull(view, enlargement.rect);
+      const maximized = enlargement?.slotId === slotId && isFull(view, enlargement.rect);
       setEnlargement(maximized ? null : {slotId, rect: fullRect(view)});
     },
     [view, enlargement],
@@ -122,47 +206,54 @@ export function useLayouts(initialViewId: string | null) {
 
   // ---- Edit mode ----
   const startEditing = useCallback(() => {
-    setDraft(structuredClone(saved));
-    setDraftIsNew(false);
+    setDraft({view: structuredClone(savedView), blocks: structuredClone(saved.blocks), isNew: false});
     setEnlargement(null);
-  }, [saved]);
+  }, [savedView, saved.blocks]);
 
   const newDraft = useCallback((copyOf?: LayoutView) => {
     const id = `view-${Date.now().toString(36)}`;
-    setDraft(
-      copyOf
+    setDraft((d) => ({
+      blocks: d?.blocks ?? structuredClone(saved.blocks),
+      isNew: true,
+      view: copyOf
         ? {...structuredClone(copyOf), id, name: `${copyOf.name} copy`}
         : {id, name: 'New view', cols: 3, rows: 2, slots: []},
-    );
-    setDraftIsNew(true);
-  }, []);
+    }));
+  }, [saved.blocks]);
+
+  const updateDraft = useCallback(
+    (fn: (v: LayoutView) => LayoutView) => setDraft((d) => d && {...d, view: fn(d.view)}),
+    [],
+  );
 
   const cancelEditing = useCallback(() => setDraft(null), []);
 
   const saveDraft = useCallback(() => {
     if (!draft) return;
-    setViews((all) =>
-      all.some((v) => v.id === draft.id)
-        ? all.map((v) => (v.id === draft.id ? draft : v))
-        : [...all, draft],
-    );
+    const {view: next, blocks: nextBlocks} = draft;
+    setSaved((s) => ({
+      blocks: nextBlocks,
+      views: s.views.some((v) => v.id === next.id)
+        ? s.views.map((v) => (v.id === next.id ? next : v))
+        : [...s.views, next],
+    }));
     // The saved definition changed, so any ad-hoc edits to it are stale.
-    setLiveByView(({[draft.id]: _dropped, ...rest}) => rest);
-    setActiveViewId(draft.id);
+    setLiveByView(({[next.id]: _dropped, ...rest}) => rest);
+    setActiveViewId(next.id);
     setDraft(null);
   }, [draft]);
 
   const deleteView = useCallback(() => {
     if (!draft) return;
-    const remaining = views.filter((v) => v.id !== draft.id);
+    const remaining = views.filter((v) => v.id !== draft.view.id);
     if (remaining.length === 0) return;
-    setViews(remaining);
+    setSaved((s) => ({...s, views: remaining}));
     setActiveViewId(remaining[0].id);
     setDraft(null);
   }, [draft, views]);
 
   const resetToDefaults = useCallback(() => {
-    setViews(DEFAULT_VIEWS);
+    setSaved(DEFAULTS);
     setLiveByView({});
     setActiveViewId(DEFAULT_VIEWS[0].id);
     setDraft(null);
@@ -171,22 +262,25 @@ export function useLayouts(initialViewId: string | null) {
 
   return {
     views,
-    activeViewId: saved.id,
+    blocks,
+    activeViewId: savedView.id,
     view,
     resolved,
     enlargement,
     editing: draft !== null,
-    draftIsNew,
-    hasAdHocChanges: Boolean(liveByView[saved.id]) || enlargement !== null,
+    draftIsNew: draft?.isNew ?? false,
+    hasAdHocChanges: Boolean(liveByView[savedView.id]) || enlargement !== null,
     selectView,
-    setSlotApp,
+    setSlotBlock,
+    createBlock,
+    updateBlock,
     resetView,
     expandSlot,
     toggleMaximize,
     restoreSlot,
     startEditing,
     newDraft,
-    updateDraft: setDraft as (fn: (v: LayoutView | null) => LayoutView | null) => void,
+    updateDraft,
     cancelEditing,
     saveDraft,
     deleteView,

@@ -9,7 +9,13 @@ import {useChrome} from './chrome';
 import {components} from './remoteComponents';
 
 interface PluginHostProps {
-  pluginId: string;
+  /**
+   * This plugin instance (block). Several instances of one app can run side by
+   * side, each with its own iframe, thread, commands and settings. The default
+   * instance of an app uses the app id.
+   */
+  instanceId: string;
+  appId: string;
   src: string;
   /**
    * Whether this plugin is in the foreground. The thread and iframe stay alive
@@ -19,7 +25,7 @@ interface PluginHostProps {
   active: boolean;
 }
 
-export function PluginHost({pluginId, src, active}: PluginHostProps) {
+export function PluginHost({instanceId, appId, src, active}: PluginHostProps) {
   const chrome = useChrome();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // One receiver per plugin: it stores the remote tree this plugin contributes.
@@ -39,30 +45,35 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
     // can be dropped when the plugin unmounts (belt-and-suspenders alongside the
     // unsubscribe returned to the plugin).
     const contextUnsubscribes = new Set<() => void>();
+    const track = (unsubscribe: () => void) => {
+      contextUnsubscribes.add(unsubscribe);
+      return () => {
+        contextUnsubscribes.delete(unsubscribe);
+        unsubscribe();
+      };
+    };
 
     const hostExports: HostThread = {
       connect: async () => receiver.connection,
       toast: async (message, options) =>
         chromeRef.current.toast(message, options),
       setCommands: async (commands) =>
-        chromeRef.current.setCommandsForPlugin(pluginId, commands),
+        chromeRef.current.setCommandsForInstance(instanceId, commands),
       listApps: async () =>
         chromeRef.current.apps
-          .filter((app) => app.id !== pluginId)
+          .filter((app) => app.id !== appId)
           .map((app) => ({id: app.id, name: app.name})),
       activateApp: async (appId) => chromeRef.current.activateApp(appId),
       forwardKeydown: async (event) =>
         chromeRef.current.handleForwardedShortcut(event),
       getContext: async () => chromeRef.current.getSharedContext(),
       setContext: async (patch) => chromeRef.current.setSharedContext(patch),
-      subscribeContext: async (listener) => {
-        const unsubscribe = chromeRef.current.subscribeSharedContext(listener);
-        contextUnsubscribes.add(unsubscribe);
-        return () => {
-          contextUnsubscribes.delete(unsubscribe);
-          unsubscribe();
-        };
-      },
+      subscribeContext: async (listener) =>
+        track(chromeRef.current.subscribeSharedContext(listener)),
+      getInstance: async () => chromeRef.current.getInstanceInfo(instanceId),
+      getSettings: async () => chromeRef.current.getInstanceSettings(instanceId),
+      subscribeSettings: async (listener) =>
+        track(chromeRef.current.subscribeInstanceSettings(instanceId, listener)),
     };
 
     const thread = ThreadWindow.iframe<Record<string, never>, HostThread>(
@@ -76,9 +87,9 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
     return () => {
       thread.close();
       for (const unsubscribe of contextUnsubscribes) unsubscribe();
-      chromeRef.current.setCommandsForPlugin(pluginId, []);
+      chromeRef.current.setCommandsForInstance(instanceId, []);
     };
-  }, [pluginId, src, receiver]);
+  }, [instanceId, src, receiver]);
 
   return (
     <>
@@ -86,7 +97,7 @@ export function PluginHost({pluginId, src, active}: PluginHostProps) {
         <iframe
           ref={iframeRef}
           src={src}
-          title={pluginId}
+          title={instanceId}
           sandbox="allow-scripts allow-same-origin"
         />
       </div>
