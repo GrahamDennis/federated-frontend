@@ -44,6 +44,11 @@ export interface Block {
    * expressions refer to it.
    */
   name?: string;
+  /**
+   * Server-managed revision (layout service only): bumped on every save, and
+   * sent back on save so concurrent edits are detected rather than lost.
+   */
+  rev?: number;
   /** Values for the app's declared settings (merged over its defaults). */
   settings?: BlockSettings;
 }
@@ -86,6 +91,8 @@ export interface LayoutView {
    * every view regardless. Absent in local mode.
    */
   roles?: string[];
+  /** Server-managed revision (see {@link Block.rev}). Absent for a new view. */
+  rev?: number;
 }
 
 /**
@@ -482,4 +489,39 @@ export function resolveInputs(
         : null;
   }
   return inputs;
+}
+
+// ---- Concurrency ----
+
+/** Strip server-managed metadata, for comparing content. */
+function content<T extends {rev?: number}>(value: T): Omit<T, 'rev'> {
+  const {rev: _rev, ...rest} = value;
+  return rest;
+}
+
+/**
+ * What an edit changed in the block registry, relative to the registry it
+ * started from: blocks added or modified (carrying their base `rev`, if any)
+ * and blocks deleted (with the `rev` they had). Saving only these — not the
+ * whole registry — means two editors only conflict when they touch the same
+ * block.
+ */
+export function blockChanges(
+  base: BlockRegistry,
+  next: BlockRegistry,
+): {changed: Block[]; deleted: {id: string; rev?: number}[]} {
+  const changed = Object.values(next).filter((block) => {
+    const before = base[block.id];
+    // No `rev` means it was never saved (e.g. created ad hoc in user mode), so
+    // it's always sent, even if this edit didn't touch it.
+    return (
+      !before ||
+      block.rev === undefined ||
+      JSON.stringify(content(before)) !== JSON.stringify(content(block))
+    );
+  });
+  const deleted = Object.values(base)
+    .filter((block) => !(block.id in next))
+    .map(({id, rev}) => ({id, rev}));
+  return {changed, deleted};
 }

@@ -981,3 +981,20 @@ code {
 .layout-errors code {
   color: var(--text);
 }
+.layout-conflict {
+  flex-basis: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d29922;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+.layout-conflict ul {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  color: #d29922;
+}
+.layout-conflict-actions {
+  display: flex;
+  gap: 8px;
+}

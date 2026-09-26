@@ -9,6 +9,7 @@ import {
   isFull,
   newBlockId,
   rectOf,
+  blockChanges,
   resolveSlots,
   setBinding,
   type BindingSource,
@@ -19,7 +20,14 @@ import {
   type LayoutView,
   type ValidationError,
 } from '@ff/layout-model';
-import {LayoutClient, LayoutRejected, type Role, type ServedLayouts} from './layoutClient';
+import {
+  LayoutClient,
+  LayoutConflict,
+  LayoutRejected,
+  type Conflict,
+  type Role,
+  type ServedLayouts,
+} from './layoutClient';
 
 const STORAGE_KEY = 'ff.layouts.v2';
 const LEGACY_STORAGE_KEY = 'ff.layout-views.v1';
@@ -126,6 +134,8 @@ export type LayoutSource = 'loading' | 'service' | 'local';
 interface Draft {
   view: LayoutView;
   blocks: BlockRegistry;
+  /** The registry this edit started from — saves send only the difference. */
+  baseBlocks: BlockRegistry;
   /** A brand-new view (not yet in the saved views). */
   isNew: boolean;
 }
@@ -166,6 +176,10 @@ export function useLayouts(initialViewId: string | null) {
   });
   const client = useMemo(() => (role ? new LayoutClient(role, workspace) : null), [role, workspace]);
   const [saveErrors, setSaveErrors] = useState<ValidationError[]>([]);
+  /** A save lost a race with another editor: what changed, and their latest. */
+  const [conflict, setConflict] = useState<{conflicts: Conflict[]; current: ServedLayouts} | null>(
+    null,
+  );
   const [saving, setSaving] = useState(false);
 
   const goLocal = useCallback(() => {
@@ -379,6 +393,7 @@ export function useLayouts(initialViewId: string | null) {
     setLiveByView({});
     setEnlargement(null);
     setSaveErrors([]);
+    setConflict(null);
   }, []);
 
   /** Which roles may use the view being edited (service mode). */
@@ -390,7 +405,13 @@ export function useLayouts(initialViewId: string | null) {
   // ---- Edit mode ----
   const startEditing = useCallback(() => {
     if (savedView === NO_VIEWS) return;
-    setDraft({view: structuredClone(savedView), blocks: structuredClone(saved.blocks), isNew: false});
+    setDraft({
+      view: structuredClone(savedView),
+      blocks: structuredClone(saved.blocks),
+      baseBlocks: saved.blocks,
+      isNew: false,
+    });
+    setConflict(null);
     setEnlargement(null);
     setSaveErrors([]);
   }, [savedView, saved.blocks]);
@@ -399,6 +420,7 @@ export function useLayouts(initialViewId: string | null) {
     const id = `view-${Date.now().toString(36)}`;
     setDraft((d) => ({
       blocks: d?.blocks ?? structuredClone(saved.blocks),
+      baseBlocks: d?.baseBlocks ?? saved.blocks,
       isNew: true,
       view: copyOf
         ? {...structuredClone(copyOf), id, name: `${copyOf.name} copy`}
@@ -410,6 +432,7 @@ export function useLayouts(initialViewId: string | null) {
   const cancelEditing = useCallback(() => {
     setDraft(null);
     setSaveErrors([]);
+    setConflict(null);
   }, []);
 
   /** Run a service mutation; a rejection (e.g. validation) keeps the draft open. */
@@ -422,8 +445,14 @@ export function useLayouts(initialViewId: string | null) {
         applyServed(served);
         setDraft(null);
         setSaveErrors([]);
+        setConflict(null);
         after?.(served);
       } catch (error) {
+        if (error instanceof LayoutConflict) {
+          setConflict({conflicts: error.conflicts, current: error.current});
+          setSaveErrors([]);
+          return;
+        }
         setSaveErrors(
           error instanceof LayoutRejected && error.errors.length > 0
             ? error.errors
@@ -440,9 +469,11 @@ export function useLayouts(initialViewId: string | null) {
     if (!draft) return;
     const {view: next, blocks: nextBlocks} = draft;
     if (source === 'service') {
-      // The service validates (CEL, wiring, geometry) and may reject the save.
+      // The service checks revisions (409 on a lost race) and validates (CEL,
+      // wiring, geometry; 422). Only the blocks this edit touched are sent.
+      const {changed, deleted} = blockChanges(draft.baseBlocks, nextBlocks);
       void mutate(
-        (c) => c.saveView(next, nextBlocks),
+        (c) => c.saveView(next, changed, deleted),
         () => {
           setLiveByView(({[next.id]: _dropped, ...rest}) => rest);
           setActiveViewId(next.id);
@@ -468,13 +499,50 @@ export function useLayouts(initialViewId: string | null) {
     const remaining = views.filter((v) => v.id !== draft.view.id);
     if (remaining.length === 0) return;
     if (source === 'service') {
-      void mutate((c) => c.deleteView(draft.view.id), () => setActiveViewId(remaining[0].id));
+      void mutate(
+        (c) => c.deleteView(draft.view.id, draft.view.rev),
+        () => setActiveViewId(remaining[0].id),
+      );
       return;
     }
     setSaved((s) => ({...s, views: remaining}));
     setActiveViewId(remaining[0].id);
     setDraft(null);
   }, [draft, views, source, mutate]);
+
+  /** Resolve a conflict by discarding this edit and loading the latest. */
+  const reloadLatest = useCallback(() => {
+    if (!conflict) return;
+    applyServed(conflict.current);
+    setDraft(null);
+    setConflict(null);
+    setSaveErrors([]);
+  }, [conflict, applyServed]);
+
+  /**
+   * Resolve a conflict by saving this edit over theirs: the same changes,
+   * rebased onto the current revisions. Only what *this* edit changed is
+   * overwritten — blocks someone else added or changed otherwise are kept.
+   */
+  const overwriteTheirs = useCallback(() => {
+    if (!conflict || !draft) return;
+    const {current} = conflict;
+    const view = {...draft.view, rev: current.views.find((v) => v.id === draft.view.id)?.rev};
+    const {changed, deleted} = blockChanges(draft.baseBlocks, draft.blocks);
+    const revOf = (id: string) => current.blocks[id]?.rev;
+    void mutate(
+      (c) =>
+        c.saveView(
+          view,
+          changed.map((b) => ({...b, rev: revOf(b.id)})),
+          deleted.map(({id}) => ({id, rev: revOf(id)})),
+        ),
+      () => {
+        setLiveByView(({[view.id]: _dropped, ...rest}) => rest);
+        setActiveViewId(view.id);
+      },
+    );
+  }, [conflict, draft, mutate]);
 
   const resetToDefaults = useCallback(() => {
     if (source === 'service') {
@@ -499,6 +567,9 @@ export function useLayouts(initialViewId: string | null) {
     setRole,
     canEdit,
     saveErrors,
+    conflict: conflict?.conflicts ?? null,
+    reloadLatest,
+    overwriteTheirs,
     saving,
     setViewRoles,
     views,

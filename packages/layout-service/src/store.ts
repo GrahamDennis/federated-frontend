@@ -28,10 +28,24 @@ export class WorkspaceStore {
     private readonly seedViewRoles: Record<string, string[]>,
   ) {}
 
-  seed(): Workspace {
+  /**
+   * A fresh workspace from the defaults. Revisions continue from `previous`
+   * (when resetting), so a client holding an old revision still conflicts.
+   */
+  seed(previous?: Workspace): Workspace {
+    const nextRev = (rev?: number) => (rev ?? 0) + 1;
     return structuredClone({
-      views: DEFAULT_VIEWS.map((view) => ({...view, roles: this.seedViewRoles[view.id] ?? []})),
-      blocks: DEFAULT_BLOCKS,
+      views: DEFAULT_VIEWS.map((view) => ({
+        ...view,
+        roles: this.seedViewRoles[view.id] ?? [],
+        rev: nextRev(previous?.views.find((v) => v.id === view.id)?.rev),
+      })),
+      blocks: Object.fromEntries(
+        Object.values(DEFAULT_BLOCKS).map((block) => [
+          block.id,
+          {...block, rev: nextRev(previous?.blocks[block.id]?.rev)},
+        ]),
+      ),
     });
   }
 

@@ -197,7 +197,8 @@ non-overlapping **slots**, and each slot shows one app:
   drag the corner handle to resize, click `+` on an empty cell to add a slot, set
   each slot's default app, and create, duplicate, rename, or delete views. Saved
   views are served by the **layout service** per workspace and role (only
-  editor roles can edit, and every save is validated server-side). If the
+  editor roles can edit, every save is validated server-side, and concurrent
+  edits to the same view or block are detected rather than lost). If the
   service is unreachable, they're kept in localStorage instead.
 
 A slot shows a **block**: a configured instance of an app. The same plugin can
@@ -335,7 +336,9 @@ exercising the cross-origin channels rather than mocking them:
   restricted to editor roles, isolated workspaces, and server-side validation
   of CEL types, wiring and geometry) and the host against it (switching role,
   choosing which roles see a view, a rejected save keeping the draft open, and
-  falling back to local storage when the service is unreachable).
+  falling back to local storage when the service is unreachable); optimistic
+  concurrency (stale saves and deletes conflict, edits to different views or
+  blocks don't, and both conflict resolutions across two editor tabs).
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.

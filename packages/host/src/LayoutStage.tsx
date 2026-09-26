@@ -183,6 +183,24 @@ export function LayoutBar({layouts}: {layouts: Layouts}) {
           <small>(editors see every view)</small>
         </div>
       )}
+      {layouts.conflict && (
+        <div className="layout-conflict" role="alert" aria-label="Edit conflict">
+          <strong>Someone else changed this while you were editing.</strong>
+          <ul>
+            {layouts.conflict.map((c) => (
+              <li key={`${c.kind}:${c.id}`}>{c.message}</li>
+            ))}
+          </ul>
+          <div className="layout-conflict-actions">
+            <button className="btn" onClick={layouts.reloadLatest}>
+              Reload latest (discard my changes)
+            </button>
+            <button className="btn btn-critical" onClick={layouts.overwriteTheirs} disabled={layouts.saving}>
+              Overwrite theirs
+            </button>
+          </div>
+        </div>
+      )}
       {layouts.saveErrors.length > 0 && (
         <ul className="layout-errors" role="alert" aria-label="Save errors">
           {layouts.saveErrors.map((e, i) => (

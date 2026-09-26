@@ -3,7 +3,7 @@ import {dirname, join, resolve} from 'node:path';
 import {serve} from '@hono/node-server';
 import {Hono, type Context} from 'hono';
 import {cors} from 'hono/cors';
-import {validateLayout, type BlockRegistry, type LayoutView} from '@ff/layout-model';
+import {validateLayout, type Block, type BlockRegistry, type LayoutView} from '@ff/layout-model';
 import {loadConfig} from './config';
 import {WorkspaceStore, isWorkspaceId, type Workspace} from './store';
 import {AppCatalog} from './apps';
@@ -83,26 +83,91 @@ app.post('/v1/validate', async (c) => {
   }
 });
 
+interface SaveBody {
+  view: LayoutView;
+  /** Only the blocks this edit added or modified, each with its base `rev`. */
+  changedBlocks?: Block[];
+  /** Blocks this edit deleted, with the `rev` they had. */
+  deletedBlocks?: {id: string; rev?: number}[];
+}
+
+interface Conflict {
+  kind: 'view' | 'block';
+  id: string;
+  message: string;
+}
+
+/**
+ * Optimistic concurrency: an edit carries the revision of every entity it
+ * touches, and conflicts only if one of *those* changed since it was loaded —
+ * two editors saving different views, or different blocks, don't collide.
+ */
+function conflictsFor(ws: Workspace, body: SaveBody): Conflict[] {
+  const conflicts: Conflict[] = [];
+  const view = ws.views.find((v) => v.id === body.view.id);
+  // (A "new" view reusing an existing id has no rev, so it conflicts here too.)
+  if (view && view.rev !== body.view.rev) {
+    conflicts.push({kind: 'view', id: view.id, message: `View “${view.name}” was changed by someone else`});
+  } else if (!view && body.view.rev !== undefined) {
+    conflicts.push({kind: 'view', id: body.view.id, message: 'This view was deleted by someone else'});
+  }
+  for (const block of body.changedBlocks ?? []) {
+    const current = ws.blocks[block.id];
+    if (current ? current.rev !== block.rev : block.rev !== undefined) {
+      conflicts.push({
+        kind: 'block',
+        id: block.id,
+        message: current
+          ? `Block “${current.label ?? block.id}” was changed by someone else`
+          : `Block “${block.id}” was deleted by someone else`,
+      });
+    }
+  }
+  for (const deleted of body.deletedBlocks ?? []) {
+    const current = ws.blocks[deleted.id];
+    if (current && current.rev !== deleted.rev) {
+      conflicts.push({kind: 'block', id: deleted.id, message: `Block “${current.label ?? deleted.id}” was changed by someone else`});
+    }
+  }
+  return conflicts;
+}
+
 app.put('/v1/layouts/views/:id', async (c) => {
   const who = caller(c);
   if ('error' in who) return who.error;
   if (!who.canEdit) return c.json({error: `Role “${who.role}” can’t edit layouts`}, 403);
-  const {view, blocks} = await c.req.json<{view: LayoutView; blocks: BlockRegistry}>();
+  const body = await c.req.json<SaveBody>();
+  const {view} = body;
   if (view?.id !== c.req.param('id')) return c.json({error: 'View id doesn’t match the URL'}, 400);
+
+  const ws = await store.get(who.workspace);
+  const conflicts = conflictsFor(ws, body);
+  if (conflicts.length > 0) {
+    return c.json(
+      {error: 'Changed by someone else', conflicts, current: visibleTo(ws, who.role, who.canEdit)},
+      409,
+    );
+  }
+
+  // The registry after this edit, which is what the view is validated against.
+  const blocks: BlockRegistry = {...ws.blocks};
+  for (const {id} of body.deletedBlocks ?? []) delete blocks[id];
+  for (const block of body.changedBlocks ?? []) {
+    blocks[block.id] = {...block, rev: (ws.blocks[block.id]?.rev ?? 0) + 1};
+  }
   let errors;
   try {
-    errors = await validate(view, blocks ?? {});
+    errors = await validate(view, blocks);
   } catch (error) {
     return c.json({error: `Can’t reach the plugin registry to validate: ${error}`}, 503);
   }
   if (errors.length > 0) return c.json({error: 'Layout is invalid', errors}, 422);
 
-  const ws = await store.get(who.workspace);
+  const current = ws.views.find((v) => v.id === view.id);
+  const saved = {...view, rev: (current?.rev ?? 0) + 1};
   const next: Workspace = {
-    blocks: blocks ?? {},
-    views: ws.views.some((v) => v.id === view.id)
-      ? ws.views.map((v) => (v.id === view.id ? view : v))
-      : [...ws.views, view],
+    blocks,
+    views: current ? ws.views.map((v) => (v.id === view.id ? saved : v)) : [...ws.views, saved],
   };
   await store.put(who.workspace, next);
   return c.json(visibleTo(next, who.role, who.canEdit));
@@ -113,8 +178,20 @@ app.delete('/v1/layouts/views/:id', async (c) => {
   if ('error' in who) return who.error;
   if (!who.canEdit) return c.json({error: `Role “${who.role}” can’t edit layouts`}, 403);
   const ws = await store.get(who.workspace);
-  const views = ws.views.filter((v) => v.id !== c.req.param('id'));
-  if (views.length === ws.views.length) return c.json({error: 'No such view'}, 404);
+  const target = ws.views.find((v) => v.id === c.req.param('id'));
+  if (!target) return c.json({error: 'No such view'}, 404);
+  const rev = c.req.query('rev');
+  if (rev !== undefined && Number(rev) !== target.rev) {
+    return c.json(
+      {
+        error: 'Changed by someone else',
+        conflicts: [{kind: 'view', id: target.id, message: `View “${target.name}” was changed by someone else`}],
+        current: visibleTo(ws, who.role, who.canEdit),
+      },
+      409,
+    );
+  }
+  const views = ws.views.filter((v) => v.id !== target.id);
   if (views.length === 0) return c.json({error: 'Can’t delete the last view'}, 409);
   const next = {...ws, views};
   await store.put(who.workspace, next);
@@ -125,7 +202,7 @@ app.post('/v1/layouts/reset', async (c) => {
   const who = caller(c);
   if ('error' in who) return who.error;
   if (!who.canEdit) return c.json({error: `Role “${who.role}” can’t edit layouts`}, 403);
-  const next = store.seed();
+  const next = store.seed(await store.get(who.workspace));
   await store.put(who.workspace, next);
   return c.json(visibleTo(next, who.role, who.canEdit));
 });
