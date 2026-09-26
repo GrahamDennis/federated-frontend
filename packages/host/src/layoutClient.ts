@@ -117,6 +117,11 @@ export class LayoutClient {
     await this.call('PUT', '/v1/me/state', state);
   }
 
+  /** Say which view this live connection is editing (null = none). */
+  async setPresence(connId: string, viewId: string | null): Promise<void> {
+    await this.call('PUT', '/v1/presence', {connId, viewId});
+  }
+
   load(): Promise<ServedLayouts> {
     return this.call('GET', '/v1/layouts');
   }

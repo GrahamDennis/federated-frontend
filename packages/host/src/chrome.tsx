@@ -22,7 +22,7 @@ import type {
 import type {AppDescriptor} from './apps';
 import {AppView} from './AppView';
 import {readWorkspaceFromUrl, writeWorkspaceToUrl} from './workspaceUrl';
-import {gridArea, resolveInputs, type Rect} from '@ff/layout-model';
+import {gridArea, resolveInputs, validatePortValue, type Rect} from '@ff/layout-model';
 import {useInstanceFeed} from './instanceFeed';
 import {LayoutBar, SlotLayer, gridTemplate} from './LayoutStage';
 import {useLayouts} from './useLayouts';
@@ -85,6 +85,25 @@ interface Toast {
 }
 
 let nextToastId = 1;
+
+const MAX_HIDDEN_KEY = 'ff.keepAliveHidden';
+const DEFAULT_MAX_HIDDEN = 4;
+
+/**
+ * How many hidden (backgrounded) instances to keep running. A per-viewer
+ * setting (localStorage `ff.keepAliveHidden`) — e.g. lower on a low-memory
+ * device.
+ */
+function readMaxHidden(): number {
+  try {
+    const n = Number(localStorage.getItem(MAX_HIDDEN_KEY));
+    return Number.isInteger(n) && n >= 0 && localStorage.getItem(MAX_HIDDEN_KEY) !== null
+      ? n
+      : DEFAULT_MAX_HIDDEN;
+  } catch {
+    return DEFAULT_MAX_HIDDEN;
+  }
+}
 
 export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // Initial workspace (primary app, docked detail, shared selection) comes from
@@ -152,16 +171,6 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
     },
     [apps],
   );
-
-  // Instances shown in layout slots join the kept-alive set (so switching views
-  // or modes doesn't reload them).
-  useEffect(() => {
-    if (layoutPlacements.size === 0) return;
-    setAliveAppIds((prev) => {
-      const added = [...layoutPlacements.keys()].filter((id) => !prev.includes(id));
-      return added.length ? [...prev, ...added] : prev;
-    });
-  }, [layoutPlacements]);
 
   const openDetail = useCallback((id: string) => {
     setDetailAppId(id);
@@ -234,6 +243,11 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // so that adding one never moves an existing iframe in the DOM (which would
   // reload it); the MRU order above is only for bookkeeping.
   const mountOrder = useRef<string[]>([]);
+  // Evicted instances leave the order too, so if they come back they're
+  // appended (never inserted before an existing iframe, which would reload it).
+  mountOrder.current = mountOrder.current.filter(
+    (id) => aliveAppIds.includes(id) || layoutPlacements.has(id),
+  );
   for (const id of [...aliveAppIds, ...layoutPlacements.keys()]) {
     if (!mountOrder.current.includes(id)) mountOrder.current.push(id);
   }
@@ -266,13 +280,32 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // Publishing bumps `outputsVersion` to re-render, which runs the feed's diff.
   const outputsRef = useRef(new Map<string, Record<string, PortValue | null>>());
   const [, setOutputsVersion] = useState(0);
+  // Values from plugins are untrusted: only declared outputs, of the declared
+  // type, are routed to other blocks. Each distinct problem is reported once.
+  const reportedPublishProblems = useRef(new Set<string>());
   const publishOutput = useCallback(
     (instanceId: string, output: string, value: PortValue | null) => {
+      const instance = instancesRef.current.get(instanceId);
+      const port = instance?.app.outputs?.[output];
+      const problem = !port
+        ? `isn’t a declared output`
+        : validatePortValue(port.type, value);
+      if (problem) {
+        const key = `${instanceId}:${output}:${problem}`;
+        if (!reportedPublishProblems.current.has(key)) {
+          reportedPublishProblems.current.add(key);
+          console.warn(`[host] ignored ${instanceId}.${output}: ${problem}`, value);
+          toast(`${instance?.label ?? instanceId}: ignored invalid “${output}” (${problem})`, {
+            tone: 'critical',
+          });
+        }
+        return;
+      }
       const current = outputsRef.current.get(instanceId) ?? {};
       outputsRef.current.set(instanceId, {...current, [output]: value});
       setOutputsVersion((version) => version + 1);
     },
-    [],
+    [toast],
   );
   const wiringView = layoutMode ? layouts.view : null;
   const scope = useMemo(() => exprScope(layouts.blocks, apps), [layouts.blocks, apps]);
@@ -328,6 +361,19 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
         : [activeAppId, detailAppId].filter((id): id is string => Boolean(id)),
     [layoutMode, layoutPlacements, activeAppId, detailAppId],
   );
+  // Keep-alive, bounded. Visible instances are always alive; hidden ones stay
+  // alive (iframe, thread and state intact) in most-recently-visible order, up
+  // to a per-viewer cap — beyond it the least recently seen are unmounted, which
+  // frees their iframes; they reload if shown again.
+  const [maxHidden] = useState(readMaxHidden);
+  useEffect(() => {
+    setAliveAppIds((prev) => {
+      const hidden = prev.filter((id) => !visibleAppIds.includes(id));
+      const next = [...visibleAppIds, ...hidden.slice(0, maxHidden)];
+      return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next;
+    });
+  }, [visibleAppIds, maxHidden]);
+
   // When several instances of one app are visible, their commands would read
   // identically, so each is tagged with its instance's label.
   const activeCommands = useMemo(() => {

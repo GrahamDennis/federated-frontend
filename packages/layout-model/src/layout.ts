@@ -1,5 +1,5 @@
 import type {BlockInputs, BlockSettings, PortValue} from '@ff/protocol';
-import {evaluateExpr, toIdentifier, type ExprScope} from './expressions';
+import {evaluateExpr, renameReferences, toIdentifier, type ExprScope} from './expressions';
 
 /**
  * The layout model: a fixed grid of cells, carved into rectangular **slots**,
@@ -524,4 +524,30 @@ export function blockChanges(
     .filter((block) => !(block.id in next))
     .map(({id, rev}) => ({id, rev}));
   return {changed, deleted};
+}
+
+// ---- Renaming blocks ----
+
+/** A view with every expression's references to block name `from` renamed `to`. */
+export function renameInView(view: LayoutView, from: string, to: string): LayoutView {
+  if (!view.bindings?.some((b) => b.expr !== undefined)) return view;
+  const bindings = view.bindings.map((b) =>
+    b.expr === undefined ? b : {...b, expr: renameReferences(b.expr, from, to)},
+  );
+  return bindings.every((b, i) => b.expr === view.bindings![i].expr) ? view : {...view, bindings};
+}
+
+/**
+ * Block renames an edit makes: blocks whose expression name differs between
+ * the registry the edit started from and the edited one.
+ */
+export function blockRenames(
+  base: BlockRegistry,
+  next: BlockRegistry,
+): {blockId: string; from: string; to: string}[] {
+  return Object.values(next).flatMap((block) => {
+    const before = base[block.id] ?? {id: block.id, appId: block.appId};
+    const [from, to] = [blockName(before), blockName(block)];
+    return from === to ? [] : [{blockId: block.id, from, to}];
+  });
 }

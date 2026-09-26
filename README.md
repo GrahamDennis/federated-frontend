@@ -129,9 +129,10 @@ command-palette entries, and modal are only surfaced while it's in the foregroun
 (`PluginHost` mounts the `RemoteRootRenderer` only when `active`; the chrome shows
 only the active app's commands). **Toasts are the deliberate exception** — a
 backgrounded app can still raise one, which is much of the point of keeping it
-alive. The app rail (`aliveAppIds`) is kept in most-recently-used order so a future
-policy can cap the number of backgrounded apps and/or evict ones idle past a
-timeout.
+alive. Keep-alive is bounded: backgrounded apps (and hidden layout blocks) stay
+alive in most-recently-seen order up to a per-viewer cap (localStorage
+`ff.keepAliveHidden`, default 4). Beyond it, the least recently seen are unmounted,
+freeing their iframes, and reload when shown again.
 
 The host chrome (nav + app rail) renders **above** plugin-contributed modals, so
 an untrusted plugin can't cover the whole window and trap the user — they can
@@ -272,6 +273,7 @@ npm run dev       # host (:5173), plugin registry (:5180), layout service (:5181
 # open http://localhost:5173
 npm run typecheck
 npm test          # Playwright e2e (boots all the dev servers automatically)
+npm run cel-conformance -w @ff/layout-model   # CEL conformance report → docs/cel-conformance.md
 ```
 
 The host discovers its apps from the plugin registry (`:5180`), which in dev is
@@ -345,6 +347,20 @@ exercising the cross-origin channels rather than mocking them:
   identity (only a valid token counts: no or tampered tokens get 401 and role
   headers are ignored); and per-user state (private per user, following them
   across reloads, and dropped when the approved view changes).
+- `tests/hygiene.spec.ts` — renaming references (only variables change;
+  fields, strings and formatting are kept), rewriting views and detecting
+  renames (pure); checking published values against their port types (pure);
+  and renaming a block in the editor, which rewrites the current view at once
+  and other views on save (via the service), with the renamed expressions still
+  working.
+- `tests/editor-polish.spec.ts` — moving, resizing and removing slots from the
+  keyboard (with announcements), drawing a slot by dragging across empty cells
+  (and refusing one over other slots), and the cap on hidden plugins
+  (least recently seen is unmounted, and remounts when shown again).
+- `tests/live.spec.ts` — live updates and presence across two people: another
+  user's view refreshing when an editor saves, "is editing" appearing and
+  clearing (including when the editor's tab closes), an editor warned before
+  saving a view someone else changed, and an ad-hoc copy dropped live.
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.
@@ -412,8 +428,9 @@ npm run test:ui     # interactive Playwright UI
   iframe *its own* origin (`:5174`), not the host's; since that differs from the
   host origin, the two remain isolated by the browser while still allowing targeted
   `postMessage`.
-- This is a prototype: there's no per-plugin CSP or auth, and every activated app
-  is kept alive indefinitely (no eviction yet). See "Next steps" below.
+- This is a prototype: there's no per-plugin CSP, and sign-in to the layout
+  service is dev-only. Backgrounded apps are kept alive up to a cap (below). See
+  "Next steps" below.
 
 ## Next steps (not implemented)
 
@@ -422,5 +439,3 @@ npm run test:ui     # interactive Playwright UI
   subdomain). Per-plugin Content-Security-Policy and permission scoping of the
   capability API.
 - More contributed surfaces (sidebars, settings panels, context menus).
-- A keep-alive eviction policy: cap the number of backgrounded apps and evict the
-  least-recently-used / longest-idle ones (the `aliveAppIds` MRU list is the hook).

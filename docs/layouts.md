@@ -49,7 +49,7 @@ view unchanged if the result would break one.
 
 | | Who | Changes | Persistence |
 |---|---|---|---|
-| **Edit mode** ("✎ Edit layouts") | admin/author | grid size, slot geometry (drag to move, corner handle to resize, `+` on an empty cell to add, ✕ to remove), which block each slot shows, block names and settings (⚙), create/duplicate/delete/rename views | saved views + block registry (the layout service, per workspace and role; localStorage if the service is unreachable) |
+| **Edit mode** ("✎ Edit layouts") | admin/author | grid size, slot geometry (drag to move, corner handle to resize, `+` on an empty cell to add or drag across empty cells to draw a bigger slot, ✕ to remove; from the keyboard, focus a slot and use arrows to move, Shift+arrows to resize, Delete to remove), which block each slot shows, block names and settings (⚙), create/duplicate/delete/rename views | saved views + block registry (the layout service, per workspace and role; localStorage if the service is unreachable) |
 | **User mode** | operator | switch view (drop-down); change a slot's block (per-slot drop-down: pick an existing block, which **swaps** if it's shown elsewhere, or "+ New <app>" for another instance); enlarge a slot one cell at a time (⋯ → Expand ◀▶▲▼) or maximize it (⛶, or double-click the header) | ad-hoc copy per view, discarded by "Reset view". Enlargement is cleared when the view changes. A block created here is added to the registry, but only the slot assignment is ad hoc |
 
 When a slot is enlarged, the slots it overlaps are **covered**. Their apps stay
@@ -57,8 +57,10 @@ alive but hidden, and come back on restore.
 
 ## How it fits the plugin host
 
-The existing host keeps every activated app mounted and positions it purely by
-class. It never reparents an iframe, because moving an iframe in the DOM reloads
+The host keeps activated apps mounted and positions them purely by class. Hidden
+instances stay alive up to a per-viewer cap (`ff.keepAliveHidden`, default 4),
+in most-recently-visible order; beyond that the least recently seen are
+unmounted and reload if shown again. It never reparents an iframe, because moving an iframe in the DOM reloads
 it. Layouts keep that rule by splitting the stage into two layers that share one
 CSS grid template:
 
@@ -142,9 +144,16 @@ At run time:
   layout mode; apps mode has none.
 - Plugins never learn who is upstream or downstream. The host is the only
   router, so plugins stay isolated from each other.
+- **Published values are checked.** Plugins are untrusted, so the host only
+  routes a value published on a *declared* output that fits the output's type:
+  a place needs a string id and name and valid coordinates, a bbox needs
+  numeric edges with south ≤ north, and so on (`validatePortValue`). Anything
+  else is dropped and reported once as a toast and a console warning, rather
+  than being passed downstream.
 - Port types are names (`place`, `bbox`, `range`, …) with shapes agreed in
-  `@ff/protocol`. The host treats values as opaque JSON and only uses the type
-  name to decide which outputs may feed which inputs.
+  `@ff/protocol`. The host uses the type name to decide which outputs may
+  feed which inputs, and to check published values (above). Otherwise values
+  are plain JSON that it passes through.
 
 In edit mode, the block panel (⚙) lists each input with a drop-down of
 type-compatible outputs from the other blocks in the view, and lists the
@@ -194,8 +203,29 @@ has(overview.selection) ? overview.selection : detail.selection
 **Why this implementation:** `@marcbachmann/cel-js` has no dependencies and
 supports custom types from plain field schemas, typed custom functions,
 optional chaining and static `check()`. The alternative, `@bufbuild/cel`,
-models custom types as protobuf messages and pulls in protobuf and RE2. The
-package claims "most of the CEL spec", not full conformance.
+models custom types as protobuf messages and pulls in protobuf and RE2.
+
+**Conformance, measured.** `npm run cel-conformance -w @ff/layout-model` runs
+the official cel-spec conformance suite (2,344 tests, via
+`@bufbuild/cel-spec`) against the library with our environment's options, and
+writes [`cel-conformance.md`](cel-conformance.md). Tests that need protobuf
+messages, declared type environments or containers are skipped, because layout
+expressions only exchange JSON-shaped values.
+
+- **Core spec: 90% of the applicable tests pass.**
+- The optional extension libraries score 28%. They're cel-go add-ons (string,
+  math and encoder extensions, two-variable comprehensions), and most aren't
+  implemented by cel-js.
+
+The notable core gaps for authors:
+
+- no cross-type numeric equality: `1 == 1.0` is a type error, where the spec
+  says `true`. Write `1.0`. Our number-taking functions accept `int` too;
+- some `uint` conversions are missing;
+- a few overflow cases that should be errors are accepted;
+- backtick-quoted field names aren't supported.
+
+Re-run the script when upgrading the library.
 
 **How it maps:**
 
@@ -233,6 +263,18 @@ text box with:
 Switching from a direct source seeds the expression with the equivalent
 reference.
 
+**Renaming blocks.** In edit mode, the block panel's "Name in expressions"
+renames a block (the name must be a valid identifier and unique).
+`renameReferences` rewrites only *variable* references, using the parser's
+source ranges, so field names (`x.histogram`), strings and formatting are
+untouched.
+
+- The draft view's expressions change immediately.
+- On save, the service rewrites every *other* view that refers to the old name
+  and bumps their revisions, so other editors' drafts and users' ad-hoc copies
+  of those views refresh.
+- Local mode does the same in the browser.
+
 The **"Nearby (derived)"** default view shows this. A second histogram
 instance's viewport is `bboxAround(histogram.selection, 1500)`, so it lists the
 cities within 1,500 km of whatever you pick in the first. Places shows
@@ -248,6 +290,8 @@ configured by `layout-service.config.yaml`):
 | `GET /v1/auth`, `POST /v1/auth/dev-login` | anyone | How to sign in; **dev only**: get a token for a configured user (no password) |
 | `GET /v1/me` | signed in | Who the token says you are: user, role, workspace |
 | `GET`/`PUT /v1/me/state` | signed in | Your own ad-hoc changes in this workspace (private to you) |
+| `GET /v1/events` | signed in | Server-sent events: `hello`, `presence`, `layouts-changed`, `ping` |
+| `PUT /v1/presence` | signed in | Say which view this live connection is editing (or none) |
 | `GET /v1/roles` | anyone | The roles and which of them can edit |
 | `GET /v1/layouts` | any role | That role's views plus the block registry. Editors see every view; other roles see views whose `roles` include them |
 | `PUT /v1/layouts/views/:id` | editors | Save a view plus the blocks the edit changed or deleted, **after conflict and validation checks**: `409` if someone else changed them first, `422` with errors if invalid |
@@ -283,6 +327,24 @@ For production:
   cross-origin iframes, so they can't read the host's localStorage either way.
 
 The service-side authorization stays as it is.
+
+**Live updates and presence.** Each signed-in host keeps an authenticated
+server-sent-events stream open (`GET /v1/events`). It uses a streaming
+`fetch`, so the token stays in a header rather than the URL, and reconnects
+with backoff; the layout bar shows *live* or *offline*.
+
+- **Changes arrive live.** Every save, delete and reset broadcasts
+  `layouts-changed` (which views, and by whom) to the workspace. Hosts refetch
+  what their role may see, so role filtering stays on the server. An ad-hoc
+  copy whose approved view moved on is dropped immediately.
+- **Stale drafts are flagged early.** An editor whose open draft is now out of
+  date is warned straight away ("Alice saved a newer version of this view…
+  Saving now will conflict"), with *Reload latest*. The `409` at save time is
+  still there as the backstop.
+- **Presence.** Entering or leaving edit mode sets the connection's presence
+  (`PUT /v1/presence`), and everyone sees "✎ Alice is editing this view"
+  (editors see "is also editing"). Presence belongs to the connection, so
+  closing the tab or losing the network clears it without heartbeats.
 
 **Per-user state.** Each user's ad-hoc changes are stored privately per
 workspace (`/v1/me/state`) and follow them across reloads and devices:
@@ -406,25 +468,25 @@ Still to do:
   service"). A real identity provider (OIDC) is the step before production.
 - Enlarged or maximized slots aren't part of the saved per-user state, by
   design (they're momentary).
-- Conflicts are resolved per entity (keep mine or take theirs). There's no
-  field-level merge, and no live notification that someone else is editing.
+- Conflicts are resolved per entity (keep mine or take theirs); there's no
+  field-level merge.
+- Events and presence live in one service process's memory. Several replicas
+  would need a shared bus (e.g. Redis pub/sub or Postgres LISTEN/NOTIFY).
 - Ad-hoc slot changes aren't encoded in the URL. Only the view id is.
-- Adding a slot is click-per-cell then resize. There's no rubber-band draw, and
-  no keyboard-accessible move/resize yet (the pickers and menus are keyboard
-  accessible).
+- Keyboard editing covers moving, resizing and removing slots. Adding a slot
+  from the keyboard is one cell at a time (Tab to a `+`, press Enter), then
+  resize.
 - A block can occupy only one slot per view at a time. Show the same app twice
   by creating a second block.
 - Unused blocks aren't garbage-collected automatically. They can be deleted by
   hand from the block panel.
-- Port types are just names. Nothing validates that a published value matches
-  its declared type.
 - Wiring has no cycle detection. A cycle would only loop if plugins republish
   on every input change, and none of the examples do.
 - The editor offers only blocks placed in the current view as input sources.
   Expressions can reference any known block by name.
-- Block names are assigned once and can't be renamed in the UI, because
-  expressions refer to them. Renaming would need to rewrite those expressions,
-  for example via the AST.
+- Renaming a block rewrites a comprehension variable with the same name as
+  well (e.g. in `list.map(histogram, …)`). Block names rarely collide with
+  such variables.
 - Deleting a block removes direct wires from it. An expression that mentions it
   is kept and shows an "Unknown variable" error until it's fixed.
 - Commands are fire-and-forget: they take no arguments, and a button can't
