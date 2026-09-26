@@ -46,7 +46,7 @@ npm run dev -w @ff/plugin-registry
 ```
 
 `npm run dev` at the **repo root** already starts this alongside the host and the
-four plugin dev servers — so normally you don't run it by hand.
+five plugin dev servers — so normally you don't run it by hand.
 
 ### OCI ("oras") mode — backed by content-addressed artifacts
 
@@ -70,6 +70,7 @@ npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/plugin-examp
 npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/plugin-map     --tag dev
 npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/plugin-places  --tag dev
 npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/plugin-histogram --tag dev
+npx tsx packages/plugin-registry/scripts/package-plugin.ts packages/plugin-actions   --tag dev
 #    package-plugin options: --tag <tag> --registry <host> --repo-prefix <p> --no-build
 
 # 4. Run the registry against the OCI config (the dev:oci script sets FF_REGISTRY_CONFIG).

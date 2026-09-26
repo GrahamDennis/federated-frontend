@@ -937,3 +937,6 @@ code {
   white-space: nowrap;
   padding: 0 8px;
 }
+.expr-ref.expr-command {
+  color: var(--success);
+}

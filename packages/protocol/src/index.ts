@@ -10,6 +10,7 @@ export const PLUGIN_ORIGIN = 'http://localhost:5174';
 export const MAP_PLUGIN_ORIGIN = 'http://localhost:5175';
 export const PLACES_PLUGIN_ORIGIN = 'http://localhost:5176';
 export const HISTOGRAM_PLUGIN_ORIGIN = 'http://localhost:5177';
+export const ACTIONS_PLUGIN_ORIGIN = 'http://localhost:5178';
 
 export type ToastTone = 'info' | 'success' | 'critical';
 
@@ -113,6 +114,34 @@ export interface HostApi {
   getInputs(): Promise<BlockInputs>;
   /** Subscribe to this instance's inputs changing (values or wiring). */
   subscribeInputs(listener: (inputs: BlockInputs) => void): Promise<() => void>;
+
+  /**
+   * Run another block's command (a ⌘K command it registered). Authority comes
+   * from the layout author, not the plugin: the host only runs `ref` if that
+   * exact reference appears in this instance's current *inputs* — i.e. the
+   * author wired it in (e.g. a button list built with CEL's `command(…)`).
+   * Resolves to whether the command ran.
+   */
+  runCommand(ref: CommandRef): Promise<boolean>;
+}
+
+/**
+ * `command`: a reference to a command registered by another block — `block` is
+ * the block's expression name (e.g. `detail`), `command` the command id.
+ */
+export interface CommandRef {
+  block: string;
+  command: string;
+}
+
+/**
+ * `buttons`: a list of buttons for an action block. Pressing one publishes its
+ * `value` (if any) and runs its `command` (if any).
+ */
+export interface ButtonSpec {
+  label: string;
+  value?: PortValue | null;
+  command?: CommandRef;
 }
 
 /**
@@ -127,7 +156,15 @@ export interface PortDescriptor {
   description?: string;
 }
 
-export type PortType = 'place' | 'bbox' | 'range' | (string & {});
+export type PortType =
+  | 'place'
+  | 'bbox'
+  | 'range'
+  | 'command'
+  | 'buttons'
+  /** Any value: an `any` output can feed an input of any type. */
+  | 'any'
+  | (string & {});
 
 /** Port values are plain JSON so they cross the iframe boundary as data. */
 export type PortValue = SelectedPlace | BBox | NumberRange | JsonValue;

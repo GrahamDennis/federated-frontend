@@ -19,6 +19,7 @@ test.describe('app switching', () => {
       'Example Notes',
       'World Map',
       'City histogram',
+      'Action buttons',
       'Google',
     ]);
   });

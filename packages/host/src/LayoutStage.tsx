@@ -153,12 +153,17 @@ interface DragState {
  * by app) is what lets the app iframes underneath stay put: swapping or moving
  * content only changes their `grid-area`, never their place in the DOM.
  */
+/** The ⌘K commands a block instance has registered (for authoring buttons). */
+type CommandsFor = (instanceId: string) => {id: string; title: string}[];
+
 export function SlotLayer({
   layouts,
   apps,
+  commandsFor,
 }: {
   layouts: Layouts;
   apps: AppDescriptor[];
+  commandsFor: CommandsFor;
 }) {
   const {view, resolved, editing} = layouts;
   const ref = useRef<HTMLDivElement>(null);
@@ -328,6 +333,7 @@ export function SlotLayer({
           instance={settingsFor}
           apps={apps}
           layouts={layouts}
+          commandsFor={commandsFor}
           onClose={() => setSettingsBlockId(null)}
         />
       )}
@@ -504,11 +510,13 @@ function BlockSettingsPanel({
   instance,
   apps,
   layouts,
+  commandsFor,
   onClose,
 }: {
   instance: Instance;
   apps: AppDescriptor[];
   layouts: Layouts;
+  commandsFor: CommandsFor;
   onClose(): void;
 }) {
   const set = (key: string, value: SettingValue) =>
@@ -566,6 +574,7 @@ function BlockSettingsPanel({
               port={port}
               sources={sources}
               scope={scope}
+              commandsFor={commandsFor}
             />
           ))}
         </section>
@@ -614,6 +623,7 @@ function InputField({
   port,
   sources,
   scope,
+  commandsFor,
 }: {
   layouts: Layouts;
   blockId: string;
@@ -621,12 +631,14 @@ function InputField({
   port: PortDescriptor;
   sources: Instance[];
   scope: ExprScope;
+  commandsFor: CommandsFor;
 }) {
   const bound = bindingFor(layouts.view, blockId, input);
   const isExpr = bound?.expr !== undefined;
   const options = sources.flatMap((source) =>
     Object.entries(source.app.outputs ?? {})
-      .filter(([, out]) => out.type === port.type)
+      // Same type, or either side is `any`.
+      .filter(([, out]) => out.type === port.type || out.type === 'any' || port.type === 'any')
       .map(([output, out]) => ({
         value: `${source.id}${SEP}${output}`,
         label: `${source.label} · ${out.label}`,
@@ -681,6 +693,7 @@ function InputField({
           expected={port.type}
           sources={sources}
           scope={scope}
+          commandsFor={commandsFor}
           onChange={setExpr}
         />
       )}
@@ -700,6 +713,7 @@ function ExpressionEditor({
   expected,
   sources,
   scope,
+  commandsFor,
   onChange,
 }: {
   value: string;
@@ -707,6 +721,7 @@ function ExpressionEditor({
   expected: string;
   sources: Instance[];
   scope: ExprScope;
+  commandsFor: CommandsFor;
   onChange(expr: string): void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -759,6 +774,26 @@ function ExpressionEditor({
           )),
         )}
       </div>
+      {expected === 'buttons' && (
+        <div className="expr-refs" aria-label="Available commands">
+          {sources.flatMap((source) =>
+            commandsFor(source.id).map((command) => {
+              const call = `command("${source.name}", "${command.id}")`;
+              return (
+                <button
+                  key={`${source.id}:${command.id}`}
+                  type="button"
+                  className="expr-ref expr-command"
+                  title={`${source.label}: ${command.title}`}
+                  onClick={() => insert(call)}
+                >
+                  {call}
+                </button>
+              );
+            }),
+          )}
+        </div>
+      )}
       <details className="expr-help">
         <summary>CEL functions &amp; idioms</summary>
         <ul>

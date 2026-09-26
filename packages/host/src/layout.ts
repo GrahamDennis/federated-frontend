@@ -238,6 +238,45 @@ export const DEFAULT_VIEWS: LayoutView[] = [
       },
     ],
   },
+  {
+    // Action buttons: the button list is a CEL list the author writes. Place
+    // buttons publish their value (driving the detail map, the nearby
+    // histogram and Places); the last runs a command on the detail map — which
+    // the host allows only because that command reference is in the list.
+    id: 'actions',
+    name: 'Quick actions',
+    cols: 3,
+    rows: 2,
+    slots: [
+      {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 2, blockId: 'actions'},
+      {id: 's2', col: 1, row: 0, colSpan: 2, rowSpan: 1, blockId: 'world-map~detail'},
+      {id: 's3', col: 1, row: 1, colSpan: 1, rowSpan: 1, blockId: 'histogram~nearby'},
+      {id: 's4', col: 2, row: 1, colSpan: 1, rowSpan: 1, blockId: 'places'},
+    ],
+    bindings: [
+      {
+        blockId: 'actions',
+        input: 'buttons',
+        lang: 'cel',
+        expr: [
+          '[',
+          '  {"label": "Tokyo", "value": place("Tokyo", 35.69, 139.69)},',
+          '  {"label": "Cairo", "value": place("Cairo", 30.04, 31.24)},',
+          '  {"label": "São Paulo", "value": place("São Paulo", -23.55, -46.63)},',
+          '  {"label": "Fly the detail map to Sydney", "command": command("detail", "map.fly.sydney")}',
+          ']',
+        ].join('\n'),
+      },
+      {blockId: 'world-map~detail', input: 'focus', from: {blockId: 'actions', output: 'pressed'}},
+      {
+        blockId: 'histogram~nearby',
+        input: 'viewport',
+        expr: 'bboxAround(actions.pressed, 1500)',
+        lang: 'cel',
+      },
+      {blockId: 'places', input: 'place', from: {blockId: 'actions', output: 'pressed'}},
+    ],
+  },
 ];
 
 export function rectsOverlap(a: Rect, b: Rect): boolean {
