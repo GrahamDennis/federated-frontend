@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import type {BlockRegistry, LayoutView, ValidationError} from '@ff/layout-model';
+import type {Block, BlockRegistry, LayoutView, ValidationError} from '@ff/layout-model';
 
 const SERVICE_URL = import.meta.env.VITE_LAYOUT_SERVICE_URL ?? 'http://localhost:5181';
 
@@ -27,6 +27,27 @@ export class LayoutRejected extends Error {
   }
 }
 
+/** One entity another editor changed since this edit began. */
+export interface Conflict {
+  kind: 'view' | 'block';
+  id: string;
+  message: string;
+}
+
+/**
+ * The save lost a race: something it touched was changed by someone else
+ * since it was loaded. `current` is the service's latest state.
+ */
+export class LayoutConflict extends Error {
+  constructor(
+    message: string,
+    readonly conflicts: Conflict[],
+    readonly current: ServedLayouts,
+  ) {
+    super(message);
+  }
+}
+
 /**
  * Client for `@ff/layout-service`. Role and workspace travel as headers — a
  * PROTOTYPE stand-in for an authenticated session.
@@ -47,12 +68,25 @@ export class LayoutClient {
     return this.call('GET', '/v1/layouts');
   }
 
-  saveView(view: LayoutView, blocks: BlockRegistry): Promise<ServedLayouts> {
-    return this.call('PUT', `/v1/layouts/views/${encodeURIComponent(view.id)}`, {view, blocks});
+  /**
+   * Save a view plus only the blocks this edit changed or deleted. Each
+   * carries the `rev` it was based on, so the service can detect lost updates.
+   */
+  saveView(
+    view: LayoutView,
+    changedBlocks: Block[],
+    deletedBlocks: {id: string; rev?: number}[],
+  ): Promise<ServedLayouts> {
+    return this.call('PUT', `/v1/layouts/views/${encodeURIComponent(view.id)}`, {
+      view,
+      changedBlocks,
+      deletedBlocks,
+    });
   }
 
-  deleteView(id: string): Promise<ServedLayouts> {
-    return this.call('DELETE', `/v1/layouts/views/${encodeURIComponent(id)}`);
+  deleteView(id: string, rev?: number): Promise<ServedLayouts> {
+    const query = rev === undefined ? '' : `?rev=${rev}`;
+    return this.call('DELETE', `/v1/layouts/views/${encodeURIComponent(id)}${query}`);
   }
 
   reset(): Promise<ServedLayouts> {
@@ -71,6 +105,9 @@ export class LayoutClient {
     });
     const json = await res.json().catch(() => ({}));
     if (res.ok) return json as ServedLayouts;
+    if (res.status === 409 && json.current) {
+      throw new LayoutConflict(json.error, json.conflicts ?? [], json.current as ServedLayouts);
+    }
     throw new LayoutRejected(json.error ?? `layout service ${res.status}`, json.errors ?? []);
   }
 }

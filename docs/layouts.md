@@ -247,8 +247,8 @@ configured by `layout-service.config.yaml`):
 |---|---|---|
 | `GET /v1/roles` | anyone | The roles and which of them can edit |
 | `GET /v1/layouts` | any role | That role's views plus the block registry. Editors see every view; other roles see views whose `roles` include them |
-| `PUT /v1/layouts/views/:id` | editors | Save a view with the block registry, **after validation**; `422` with the errors if invalid |
-| `DELETE /v1/layouts/views/:id`, `POST /v1/layouts/reset` | editors | Delete a view (not the last one), or reseed the defaults |
+| `PUT /v1/layouts/views/:id` | editors | Save a view plus the blocks the edit changed or deleted, **after conflict and validation checks**: `409` if someone else changed them first, `422` with errors if invalid |
+| `DELETE /v1/layouts/views/:id?rev=`, `POST /v1/layouts/reset` | editors | Delete a view (not the last one; `409` if `rev` is stale), or reseed the defaults |
 | `POST /v1/validate` | anyone | Validate without saving |
 
 **Roles.** Each view has a `roles` list, and editor roles see every view. The
@@ -279,6 +279,27 @@ same code the host uses:
 
 The plugins' typed ports come from the plugin registry's discovery API. A
 rejected save leaves the editor open with the server's errors listed.
+
+**Concurrent edits (optimistic concurrency).** Every view and every block
+carries a server-managed `rev`, which is bumped on each save. A save sends:
+
+- the view with the `rev` it was loaded at;
+- only the blocks the edit changed or deleted, each with its base `rev`
+  (`blockChanges` in the model). A block with no `rev` was never saved, so it's
+  always sent.
+
+The service answers `409` if any of *those* entities has moved on, and includes
+the current state in the response. Revisions are per entity, not per
+workspace, so two editors only conflict when they touch the same view or the
+same block. Resetting to defaults continues the revision numbers, so old
+clients still conflict.
+
+In the editor, a conflict shows what changed, with two options:
+
+- **Reload latest** discards my edit.
+- **Overwrite theirs** re-sends *my* changes rebased onto the current
+  revisions. Only what this edit changed is overwritten; blocks someone else
+  added or changed otherwise are kept.
 
 **Fallback.** If the service can't be reached, the host shows **"○ Local only"**
 and uses this browser's localStorage, which was the only mode before the
@@ -357,8 +378,8 @@ Still to do:
   above). Real identity is the main thing between this and production use.
 - Per-user ad-hoc changes (a swapped slot, a block created in user mode) live
   only in the page. They aren't saved per user on the server.
-- Saving a view also saves the whole block registry, last writer wins. There's
-  no concurrency control (e.g. ETags) between two editors.
+- Conflicts are resolved per entity (keep mine or take theirs). There's no
+  field-level merge, and no live notification that someone else is editing.
 - Ad-hoc slot changes aren't encoded in the URL. Only the view id is.
 - Adding a slot is click-per-cell then resize. There's no rubber-band draw, and
   no keyboard-accessible move/resize yet (the pickers and menus are keyboard
