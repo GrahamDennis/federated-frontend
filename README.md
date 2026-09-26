@@ -201,7 +201,11 @@ Blocks can also be **wired**. A plugin declares typed `inputs` and `outputs`,
 a view binds one block's output to another's input, and the host routes the
 values between the isolated iframes. In the "Explorer (wired)" view, the map's
 visible area filters the histogram, and picking a city in the histogram drives
-the detail map and Places. Wiring is edited in the block panel (⚙).
+the detail map and Places. Wiring is edited in the block panel (⚙). An input can
+also be bound to a **derived expression** in [CEL](https://cel.dev), e.g.
+`bboxAround(histogram.selection, 1500)`. It is type-checked in the editor and
+evaluated by the host (see the "Nearby (derived)" view and
+[`docs/layouts.md`](docs/layouts.md)).
 
 Apps stay kept-alive and are placed by `grid-area` only, so moving, swapping, or
 enlarging never reloads an iframe. The ⌘K palette and shared context span every
@@ -305,6 +309,11 @@ exercising the cross-origin channels rather than mocking them:
   driving the detail map and Places, brushing, wired inputs taking precedence
   over the shared selection, and rewiring in edit mode (only type-compatible
   outputs offered); deleting blocks (refused while another view uses them).
+- `tests/expressions.spec.ts` — CEL expressions (pure): typed block variables,
+  absent outputs via `has()`/optional chaining, the geo functions, static
+  checking (syntax, unknown names, overloads, expected type) and references;
+  end to end: the computed viewport in the Nearby view, and editing
+  expressions (errors, inferred type, switching from a direct source).
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.

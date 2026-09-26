@@ -1,7 +1,8 @@
 import {useRef, useState} from 'preact/hooks';
 import type {PortDescriptor, SettingDescriptor, SettingValue} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
-import {instanceFor, knownInstances, type Instance} from './instances';
+import {exprScope, instanceFor, knownInstances, type Instance} from './instances';
+import {FUNCTIONS, IDIOMS, checkExpr, type ExprScope} from './expressions';
 import {
   MAX_GRID,
   addSlot,
@@ -295,8 +296,9 @@ export function SlotLayer({
                 .filter((b) => b.blockId === r.slot.blockId)
                 .map((b) => (
                   <span key={b.input} className="slot-edit-wire">
-                    ⇠ {b.input} ← {instance(b.from.blockId)?.label ?? b.from.blockId}.
-                    {b.from.output}
+                    {b.from
+                      ? `⇠ ${b.input} ← ${instance(b.from.blockId)?.label ?? b.from.blockId}.${b.from.output}`
+                      : `⇠ ${b.input} = ${b.expr ?? ''}`}
                   </span>
                 ))}
             </div>
@@ -513,6 +515,7 @@ function BlockSettingsPanel({
     layouts.updateBlock(instance.block, {settings: {[key]: value}});
   const explicit = instance.id !== instance.app.id && instance.id in layouts.blocks;
   const usedIn = explicit ? layouts.viewsUsingBlock(instance.id) : [];
+  const scope = exprScope(layouts.blocks, apps);
   // Other blocks placed in this view, as candidate sources for inputs.
   const sources = layouts.view.slots
     .map((slot) => slot.blockId)
@@ -529,6 +532,11 @@ function BlockSettingsPanel({
       </header>
       <p className="block-settings-meta">
         {instance.app.name} · <code>{instance.id}</code>
+        {instance.app.outputs && (
+          <>
+            {' '}· in expressions: <code className="block-name">{instance.name}</code>
+          </>
+        )}
       </p>
       <label className="block-field">
         <span>Block name</span>
@@ -557,6 +565,7 @@ function BlockSettingsPanel({
               input={input}
               port={port}
               sources={sources}
+              scope={scope}
             />
           ))}
         </section>
@@ -592,9 +601,11 @@ function BlockSettingsPanel({
 
 const SEP = '\u0000';
 
+const EXPRESSION = '\u0001expr';
+
 /**
- * Connect one input to a type-compatible output of another block in the view.
- * The value encodes `blockId␀output`.
+ * Connect one input: to a type-compatible output of another block in the view
+ * (the option value encodes `blockId␀output`), or to a CEL expression.
  */
 function InputField({
   layouts,
@@ -602,14 +613,17 @@ function InputField({
   input,
   port,
   sources,
+  scope,
 }: {
   layouts: Layouts;
   blockId: string;
   input: string;
   port: PortDescriptor;
   sources: Instance[];
+  scope: ExprScope;
 }) {
   const bound = bindingFor(layouts.view, blockId, input);
+  const isExpr = bound?.expr !== undefined;
   const options = sources.flatMap((source) =>
     Object.entries(source.app.outputs ?? {})
       .filter(([, out]) => out.type === port.type)
@@ -618,32 +632,149 @@ function InputField({
         label: `${source.label} · ${out.label}`,
       })),
   );
+  const selected = isExpr
+    ? EXPRESSION
+    : bound?.from
+      ? `${bound.from.blockId}${SEP}${bound.from.output}`
+      : '';
+  const setExpr = (expr: string) =>
+    layouts.setInputBinding(blockId, input, {expr, lang: 'cel'});
   return (
-    <label className="block-field">
-      <span>
-        {port.label} <code>{port.type}</code>
-      </span>
-      <select
-        aria-label={`Input ${port.label}`}
-        value={bound ? `${bound.from.blockId}${SEP}${bound.from.output}` : ''}
-        onChange={(e) => {
-          const [fromBlock, output] = e.currentTarget.value.split(SEP);
-          layouts.setInputBinding(
-            blockId,
-            input,
-            fromBlock ? {blockId: fromBlock, output} : null,
-          );
-        }}
-      >
-        <option value="">— Not connected —</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+    <div className="block-field">
+      <label className="block-field">
+        <span>
+          {port.label} <code>{port.type}</code>
+        </span>
+        <select
+          aria-label={`Input ${port.label}`}
+          value={selected}
+          onChange={(e) => {
+            const value = e.currentTarget.value;
+            if (value === EXPRESSION) {
+              // Seed the expression with the current direct source, if any.
+              const from = bound?.from;
+              const name = from && scope.find((b) => b.blockId === from.blockId)?.name;
+              setExpr(from && name ? `${name}.${from.output}` : '');
+              return;
+            }
+            const [fromBlock, output] = value.split(SEP);
+            layouts.setInputBinding(
+              blockId,
+              input,
+              fromBlock ? {from: {blockId: fromBlock, output}} : null,
+            );
+          }}
+        >
+          <option value="">— Not connected —</option>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+          <option value={EXPRESSION}>ƒ Expression (CEL)…</option>
+        </select>
+      </label>
+      {isExpr && (
+        <ExpressionEditor
+          value={bound!.expr!}
+          label={port.label}
+          expected={port.type}
+          sources={sources}
+          scope={scope}
+          onChange={setExpr}
+        />
+      )}
       {port.description && <small>{port.description}</small>}
-    </label>
+    </div>
+  );
+}
+
+/**
+ * Text editor for a CEL expression: live parse/type errors (including a result
+ * type that doesn't match the input), the inferred type, clickable references
+ * to other blocks' outputs, and the available functions.
+ */
+function ExpressionEditor({
+  value,
+  label,
+  expected,
+  sources,
+  scope,
+  onChange,
+}: {
+  value: string;
+  label: string;
+  expected: string;
+  sources: Instance[];
+  scope: ExprScope;
+  onChange(expr: string): void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const check = value.trim() ? checkExpr(value, scope, expected) : null;
+
+  function insert(text: string) {
+    const el = ref.current;
+    const at = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? at;
+    onChange(value.slice(0, at) + text + value.slice(end));
+  }
+
+  return (
+    <div className="expr-editor">
+      <textarea
+        ref={ref}
+        aria-label={`Expression for ${label}`}
+        spellcheck={false}
+        rows={3}
+        value={value}
+        placeholder="e.g. bboxAround(histogram.selection, 1500)"
+        onInput={(e) => onChange(e.currentTarget.value)}
+      />
+      <div className="expr-status" role="status">
+        {!check ? (
+          <span className="expr-hint">Empty — evaluates to null</span>
+        ) : check.ok ? (
+          <span className="expr-ok">
+            ✓ → <code>{check.type}</code>
+          </span>
+        ) : (
+          <span className="expr-error">
+            ✕ {check.message}
+            {check.start !== undefined && ` (at ${check.start + 1})`}
+          </span>
+        )}
+      </div>
+      <div className="expr-refs" aria-label="Available outputs">
+        {sources.flatMap((source) =>
+          Object.entries(source.app.outputs ?? {}).map(([output, out]) => (
+            <button
+              key={`${source.id}.${output}`}
+              type="button"
+              className="expr-ref"
+              title={`${source.label} · ${out.label} (${out.type})`}
+              onClick={() => insert(`${source.name}.${output}`)}
+            >
+              {source.name}.{output}
+            </button>
+          )),
+        )}
+      </div>
+      <details className="expr-help">
+        <summary>CEL functions &amp; idioms</summary>
+        <ul>
+          {FUNCTIONS.filter((fn) => fn.doc).map((fn) => (
+            <li key={fn.signature}>
+              <code>{fn.signature}</code> — {fn.doc}
+            </li>
+          ))}
+          {IDIOMS.map((idiom) => (
+            <li key={idiom.example}>
+              <code>{idiom.example}</code> — {idiom.doc}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
   );
 }
 

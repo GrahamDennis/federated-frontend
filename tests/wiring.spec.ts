@@ -26,8 +26,7 @@ test.describe('wiring model (pure)', () => {
 
   test('rebinding replaces, and null disconnects', () => {
     const rebound = setBinding(explorer, 'places', 'place', {
-      blockId: 'world-map~overview',
-      output: 'selection',
+      from: {blockId: 'world-map~overview', output: 'selection'},
     });
     expect(rebound.bindings!.filter((b) => b.blockId === 'places')).toHaveLength(1);
     const cut = setBinding(rebound, 'places', 'place', null);
@@ -110,6 +109,7 @@ test.describe('wired explorer view', () => {
       'Overview map · Selected city',
       'City histogram · Picked city',
       'Detail map · Selected city',
+      'ƒ Expression (CEL)…',
     ]);
     await input.selectOption({label: 'Overview map · Selected city'});
     await expect(page.locator('.slot-edit-wire', {hasText: 'place ←'})).toContainText(

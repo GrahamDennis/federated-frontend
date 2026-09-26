@@ -1,4 +1,5 @@
 import type {BlockInputs, BlockSettings, PortValue} from '@ff/protocol';
+import {evaluateExpr, toIdentifier, type ExprScope} from './expressions';
 
 /**
  * The layout model: a fixed grid of cells, carved into rectangular **slots**,
@@ -36,6 +37,13 @@ export interface Block {
   appId: string;
   /** Display name; defaults to the app's name. */
   label?: string;
+  /**
+   * Short identifier expressions use to refer to this block (`overview` in
+   * `overview.selection`). Defaults to the block id made identifier-safe
+   * (`world-map~2` → `world_map_2`). Assigned once; not renamed, since
+   * expressions refer to it.
+   */
+  name?: string;
   /** Values for the app's declared settings (merged over its defaults). */
   settings?: BlockSettings;
 }
@@ -50,6 +58,11 @@ export function blockFor(
   appIds: readonly string[],
 ): Block | null {
   return blocks[id] ?? (appIds.includes(id) ? {id, appId: id} : null);
+}
+
+/** The name expressions use for a block (see {@link Block.name}). */
+export function blockName(block: Block): string {
+  return block.name ?? toIdentifier(block.id);
 }
 
 /** A fresh block id for another instance of `appId`. */
@@ -78,8 +91,18 @@ export interface LayoutView {
 export interface Binding {
   blockId: string;
   input: string;
-  from: {blockId: string; output: string};
+  /** Source: another block's output, taken as-is… */
+  from?: {blockId: string; output: string};
+  /** …or a derived expression over block outputs (see expressions.ts). */
+  expr?: string;
+  /** The expression language; recorded so the format can evolve. */
+  lang?: 'cel';
 }
+
+/** What an input is bound to: a direct output reference or a CEL expression. */
+export type BindingSource =
+  | {from: {blockId: string; output: string}}
+  | {expr: string; lang: 'cel'};
 
 /** A temporary run-time enlargement of one slot (covers the slots under it). */
 export interface Enlargement {
@@ -96,13 +119,22 @@ export const DEFAULT_BLOCKS: BlockRegistry = {
     id: 'world-map~overview',
     appId: 'world-map',
     label: 'Overview map',
+    name: 'overview',
     settings: {title: 'Overview', followSelection: false, flyZoom: 4},
   },
   'world-map~detail': {
     id: 'world-map~detail',
     appId: 'world-map',
     label: 'Detail map',
+    name: 'detail',
     settings: {title: 'Detail', showCities: false, flyZoom: 12},
+  },
+  'histogram~nearby': {
+    id: 'histogram~nearby',
+    appId: 'histogram',
+    label: 'Nearby cities',
+    name: 'nearby',
+    settings: {title: 'Within 1,500 km', maxRows: 6},
   },
 };
 
@@ -174,6 +206,36 @@ export const DEFAULT_VIEWS: LayoutView[] = [
       {blockId: 'histogram', input: 'viewport', from: {blockId: 'world-map~overview', output: 'viewport'}},
       {blockId: 'world-map~detail', input: 'focus', from: {blockId: 'histogram', output: 'selection'}},
       {blockId: 'places', input: 'place', from: {blockId: 'histogram', output: 'selection'}},
+    ],
+  },
+  {
+    // Derived expressions: a second histogram shows the cities within 1,500 km
+    // of whatever's picked in the first (its viewport is *computed* from that
+    // pick), and Places shows the nearby pick if there is one, else the main one.
+    id: 'nearby',
+    name: 'Nearby (derived)',
+    cols: 3,
+    rows: 2,
+    slots: [
+      {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 2, blockId: 'histogram'},
+      {id: 's2', col: 1, row: 0, colSpan: 2, rowSpan: 1, blockId: 'world-map~detail'},
+      {id: 's3', col: 1, row: 1, colSpan: 1, rowSpan: 1, blockId: 'histogram~nearby'},
+      {id: 's4', col: 2, row: 1, colSpan: 1, rowSpan: 1, blockId: 'places'},
+    ],
+    bindings: [
+      {blockId: 'world-map~detail', input: 'focus', from: {blockId: 'histogram', output: 'selection'}},
+      {
+        blockId: 'histogram~nearby',
+        input: 'viewport',
+        expr: 'bboxAround(histogram.selection, 1500)',
+        lang: 'cel',
+      },
+      {
+        blockId: 'places',
+        input: 'place',
+        expr: 'nearby.?selection.orValue(histogram.selection)',
+        lang: 'cel',
+      },
     ],
   },
 ];
@@ -342,31 +404,38 @@ export function bindingFor(view: LayoutView, blockId: string, input: string): Bi
   return view.bindings?.find((b) => b.blockId === blockId && b.input === input);
 }
 
-/** Connect (or, with `from = null`, disconnect) one block input. */
+/** Connect (or, with `source = null`, disconnect) one block input. */
 export function setBinding(
   view: LayoutView,
   blockId: string,
   input: string,
-  from: Binding['from'] | null,
+  source: BindingSource | null,
 ): LayoutView {
   const others = (view.bindings ?? []).filter(
     (b) => !(b.blockId === blockId && b.input === input),
   );
-  return {...view, bindings: from ? [...others, {blockId, input, from}] : others};
+  return {...view, bindings: source ? [...others, {blockId, input, ...source}] : others};
 }
 
 /**
  * A block's wired inputs in `view`: every bound input is present, holding its
- * source's latest published value (or null). Unbound inputs are absent.
+ * source's latest published value — or its expression's result — or null.
+ * Unbound inputs are absent.
  */
 export function resolveInputs(
   view: LayoutView,
   blockId: string,
   outputOf: (blockId: string, output: string) => PortValue | null | undefined,
+  scope: ExprScope = [],
 ): BlockInputs {
   const inputs: BlockInputs = {};
   for (const b of view.bindings ?? []) {
-    if (b.blockId === blockId) inputs[b.input] = outputOf(b.from.blockId, b.from.output) ?? null;
+    if (b.blockId !== blockId) continue;
+    inputs[b.input] = b.from
+      ? (outputOf(b.from.blockId, b.from.output) ?? null)
+      : b.expr
+        ? evaluateExpr(b.expr, scope, outputOf)
+        : null;
   }
   return inputs;
 }

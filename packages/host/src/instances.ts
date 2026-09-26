@@ -1,6 +1,7 @@
 import {resolveSettings, type BlockSettings} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
-import {blockFor, type Block, type BlockRegistry} from './layout';
+import {blockFor, blockName, type Block, type BlockRegistry} from './layout';
+import type {ExprScope} from './expressions';
 
 /**
  * A runnable instance of an app: what the chrome actually mounts (one iframe +
@@ -11,6 +12,8 @@ export interface Instance {
   id: string;
   app: AppDescriptor;
   label: string;
+  /** Identifier expressions use to refer to this block's outputs. */
+  name: string;
   /** Resolved settings: the block's values over the app's declared defaults. */
   settings: BlockSettings;
   block: Block;
@@ -28,6 +31,7 @@ export function instanceFor(
     id,
     app,
     label: block.label || app.name,
+    name: blockName(block),
     settings: resolveSettings(app.settings, block.settings),
     block,
   };
@@ -39,4 +43,17 @@ export function knownInstances(blocks: BlockRegistry, apps: AppDescriptor[]): In
   return [...new Set(ids)]
     .map((id) => instanceFor(blocks, id, apps))
     .filter((i): i is Instance => i !== null);
+}
+
+/** Every known block with outputs, as the scope derived expressions can read. */
+export function exprScope(blocks: BlockRegistry, apps: AppDescriptor[]): ExprScope {
+  return knownInstances(blocks, apps)
+    .filter((i) => i.app.outputs)
+    .map((i) => ({
+      name: i.name,
+      blockId: i.id,
+      outputs: Object.fromEntries(
+        Object.entries(i.app.outputs!).map(([output, port]) => [output, port.type]),
+      ),
+    }));
 }
