@@ -3,15 +3,28 @@ import {test} from './fixtures';
 import {blockChanges} from '../packages/layout-model/src/layout';
 
 /**
- * The layout service (:5181): layouts per workspace and role, edits restricted
- * to editor roles, and every save validated server-side with the same model the
- * editor uses (CEL type checks, wiring, geometry).
+ * The layout service (:5181): signed-in sessions (dev tokens), layouts per
+ * workspace and role, edits restricted to editor roles, per-user state, and
+ * every save validated server-side with the same model the editor uses.
  */
 const SERVICE = 'http://localhost:5181';
 
-function api(request: APIRequestContext, role: string, workspace: string) {
-  const headers = {'X-FF-Role': role, 'X-FF-Workspace': workspace};
+/** The configured dev users, by role (see layout-service.config.yaml). */
+const USER_FOR_ROLE: Record<string, string> = {admin: 'alice', pilot: 'pat', analyst: 'andy'};
+
+async function signIn(request: APIRequestContext, user: string, workspace: string) {
+  const res = await request.post(`${SERVICE}/v1/auth/dev-login`, {data: {user, workspace}});
+  expect(res.status()).toBe(200);
+  return (await res.json()).token as string;
+}
+
+/** An API session as the dev user holding `role`, in `workspace`. */
+async function api(request: APIRequestContext, role: string, workspace: string) {
+  const token = await signIn(request, USER_FOR_ROLE[role], workspace);
+  const headers = {Authorization: `Bearer ${token}`};
   return {
+    token,
+    state: () => request.get(`${SERVICE}/v1/me/state`, {headers}),
     get: () => request.get(`${SERVICE}/v1/layouts`, {headers}),
     put: (view: unknown, changedBlocks: unknown[] = [], deletedBlocks: unknown[] = []) =>
       request.put(`${SERVICE}/v1/layouts/views/${(view as {id: string}).id}`, {
@@ -31,7 +44,7 @@ test.describe('layout service API', () => {
     const roles = await (await request.get(`${SERVICE}/v1/roles`)).json();
     expect(roles.roles.map((r: {id: string}) => r.id)).toEqual(['admin', 'pilot', 'analyst']);
 
-    const pilot = await (await api(request, 'pilot', ws).get()).json();
+    const pilot = await (await (await api(request, 'pilot', ws)).get()).json();
     expect(pilot.canEdit).toBe(false);
     expect(pilot.views.map((v: {id: string}) => v.id)).toEqual([
       'nav-detail',
@@ -39,27 +52,27 @@ test.describe('layout service API', () => {
       'two-maps',
       'actions',
     ]);
-    const admin = await (await api(request, 'admin', ws).get()).json();
+    const admin = await (await (await api(request, 'admin', ws)).get()).json();
     expect(admin.views.length).toBeGreaterThan(pilot.views.length);
 
     const view = admin.views.find((v: {id: string}) => v.id === 'quad');
-    expect((await api(request, 'pilot', ws).put(view)).status()).toBe(403);
-    expect((await api(request, 'admin', ws).put({...view, name: 'Quad!'})).status()).toBe(200);
+    expect((await (await api(request, 'pilot', ws)).put(view)).status()).toBe(403);
+    expect((await (await api(request, 'admin', ws)).put({...view, name: 'Quad!'})).status()).toBe(200);
 
     // Workspaces are isolated.
-    const other = await (await api(request, 'admin', `${ws}-other`).get()).json();
+    const other = await (await (await api(request, 'admin', `${ws}-other`)).get()).json();
     expect(other.views.find((v: {id: string}) => v.id === 'quad').name).toBe('Quad');
   });
 
   test('saves are validated server-side (CEL types, wiring, geometry)', async ({request}, testInfo) => {
     const ws = `api-${testInfo.testId}`.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64);
-    const admin = await (await api(request, 'admin', ws).get()).json();
+    const admin = await (await (await api(request, 'admin', ws)).get()).json();
     const nearby = structuredClone(admin.views.find((v: {id: string}) => v.id === 'nearby'));
     nearby.bindings[1].expr = 'histogram.selection'; // a Place into a bbox input
     nearby.bindings.push({blockId: 'places', input: 'nope', from: {blockId: 'histogram', output: 'selection'}});
     nearby.slots[0].colSpan = 3; // overlaps its neighbours
 
-    const res = await api(request, 'admin', ws).put(nearby);
+    const res = await (await api(request, 'admin', ws)).put(nearby);
     expect(res.status()).toBe(422);
     const {errors} = await res.json();
     const messages = errors.map((e: {path: string; message: string}) => `${e.path}: ${e.message}`);
@@ -77,13 +90,13 @@ const openLayouts = async (page: Page) => {
 };
 
 test.describe('layout service in the host', () => {
-  test('switching role changes the available views and editing rights', async ({
+  test('signing in as another user changes the available views and editing rights', async ({
     connectedPage: page,
   }) => {
     await openLayouts(page);
     await expect(page.getByRole('button', {name: /Edit layouts/})).toBeVisible();
 
-    await page.getByLabel('Role').selectOption('pilot');
+    await page.getByLabel('Signed in as').selectOption('pat');
     await expect(page.getByLabel('Layout view').locator('option')).toHaveText([
       'Map + detail',
       'Portals (4-up)',
@@ -92,9 +105,9 @@ test.describe('layout service in the host', () => {
     ]);
     await expect(page.getByRole('button', {name: /Edit layouts/})).toHaveCount(0);
 
-    // The role is remembered across reloads.
+    // The signed-in user is remembered across reloads.
     await page.reload();
-    await expect(page.getByLabel('Role')).toHaveValue('pilot');
+    await expect(page.getByLabel('Signed in as')).toHaveValue('pat');
   });
 
   test('an editor decides which roles see a view', async ({connectedPage: page}) => {
@@ -107,7 +120,7 @@ test.describe('layout service in the host', () => {
     await page.getByRole('button', {name: 'Save view'}).click();
     await expect(page.getByRole('button', {name: /Edit layouts/})).toBeVisible();
 
-    await page.getByLabel('Role').selectOption('pilot');
+    await page.getByLabel('Signed in as').selectOption('pat');
     await expect(page.getByLabel('Layout view').locator('option')).toContainText(['Quad']);
   });
 
@@ -142,7 +155,7 @@ test.describe('layout service in the host', () => {
     await page.route(`${SERVICE}/**`, (route) => route.abort());
     await page.goto('/?mode=layout');
     await expect(page.locator('.source-badge.local')).toHaveText('○ Local only');
-    await expect(page.getByLabel('Role')).toHaveCount(0);
+    await expect(page.getByLabel('Signed in as')).toHaveCount(0);
 
     await page.getByRole('button', {name: /Edit layouts/}).click();
     await page.getByLabel('View name').fill('Offline edit');
@@ -175,7 +188,7 @@ test.describe('optimistic concurrency (API)', () => {
   });
 
   test('a stale view save conflicts; a fresh one bumps the revision', async ({request}, testInfo) => {
-    const svc = api(request, 'admin', workspaceFor(testInfo));
+    const svc = await api(request, 'admin', workspaceFor(testInfo));
     const {views} = await (await svc.get()).json();
     const quad = views.find((v: {id: string}) => v.id === 'quad');
     expect(quad.rev).toBe(1);
@@ -200,7 +213,7 @@ test.describe('optimistic concurrency (API)', () => {
   });
 
   test('edits only conflict when they touch the same view or block', async ({request}, testInfo) => {
-    const svc = api(request, 'admin', workspaceFor(testInfo));
+    const svc = await api(request, 'admin', workspaceFor(testInfo));
     const {views, blocks} = await (await svc.get()).json();
     const byId = (id: string) => views.find((v: {id: string}) => v.id === id);
     const overview = blocks['world-map~overview'];
@@ -260,5 +273,117 @@ test.describe('optimistic concurrency (host)', () => {
     await expect(other.getByRole('button', {name: /Edit layouts/})).toBeVisible();
     await page.reload();
     await expect(page.getByLabel('Layout view').locator('option:checked')).toHaveText('Quad (second)');
+  });
+});
+
+test.describe('identity (signed tokens)', () => {
+  test('the service trusts only a valid token', async ({request}, testInfo) => {
+    const ws = workspaceFor(testInfo);
+    // No token, or a tampered one: 401.
+    expect((await request.get(`${SERVICE}/v1/layouts`)).status()).toBe(401);
+    const pat = await api(request, 'pilot', ws);
+    const [head, body, sig] = pat.token.split('.');
+    const forged = JSON.parse(Buffer.from(body, 'base64url').toString());
+    forged.role = 'admin';
+    const tampered = `${head}.${Buffer.from(JSON.stringify(forged)).toString('base64url')}.${sig}`;
+    expect(
+      (await request.get(`${SERVICE}/v1/layouts`, {headers: {Authorization: `Bearer ${tampered}`}})).status(),
+    ).toBe(401);
+    // Old-style role headers carry no weight: Pat is still a pilot.
+    const res = await request.get(`${SERVICE}/v1/me`, {
+      headers: {Authorization: `Bearer ${pat.token}`, 'X-FF-Role': 'admin'},
+    });
+    expect(await res.json()).toMatchObject({user: {id: 'pat', name: 'Pat'}, role: 'pilot', canEdit: false});
+    // Unknown users can't sign in.
+    expect(
+      (await request.post(`${SERVICE}/v1/auth/dev-login`, {data: {user: 'mallory'}})).status(),
+    ).toBe(400);
+  });
+
+  test('per-user state is private and stored per workspace', async ({request}, testInfo) => {
+    const ws = workspaceFor(testInfo);
+    const pat = await api(request, 'pilot', ws);
+    const andy = await api(request, 'analyst', ws);
+    const state = {liveByView: {quad: {id: 'quad', rev: 1}}, blocks: {}};
+    const put = await request.put(`${SERVICE}/v1/me/state`, {
+      headers: {Authorization: `Bearer ${pat.token}`},
+      data: state,
+    });
+    expect(put.status()).toBe(204);
+    expect(await (await pat.state()).json()).toEqual(state);
+    expect(await (await andy.state()).json()).toEqual({liveByView: {}, blocks: {}});
+  });
+});
+
+test.describe('per-user state (host)', () => {
+  const statePut = (page: Page) =>
+    page.waitForResponse((r) => r.url().endsWith('/v1/me/state') && r.request().method() === 'PUT');
+
+  test('my ad-hoc changes follow me, and nobody else sees them', async ({connectedPage: page}) => {
+    await page.goto('/?mode=layout&view=quad');
+    await expect(page.locator('.source-badge.service')).toBeVisible();
+    await expect(page.getByLabel('Signed in as')).toHaveValue('alice');
+
+    // Swap two slots (an ad-hoc change) and add a block of my own.
+    let saved = statePut(page);
+    await page.getByLabel('Block in slot s2').selectOption('world-map');
+    await saved;
+    saved = statePut(page);
+    await page.getByLabel('Block in slot s4').selectOption('new:world-map');
+    await saved;
+
+    await page.reload();
+    await expect(page.getByLabel('Block in slot s1')).toHaveValue('places');
+    await expect(page.getByLabel('Block in slot s4')).toHaveValue('world-map~2');
+
+    // Another user in the same workspace sees the approved layout.
+    await page.getByLabel('Signed in as').selectOption('andy');
+    await expect(page.getByLabel('Signed in as')).toHaveValue('andy');
+    await expect(page.locator('.source-badge.service')).toBeVisible();
+    await page.getByLabel('Layout view').selectOption('quad');
+    await expect(page.getByLabel('Block in slot s1')).toHaveValue('world-map');
+    await expect(page.getByLabel('Block in slot s4')).toHaveValue('');
+
+    // Back as Alice: still there. "Reset view" returns to the approved layout.
+    await page.getByLabel('Signed in as').selectOption('alice');
+    await expect(page.getByLabel('Signed in as')).toHaveValue('alice');
+    await expect(page.locator('.source-badge.service')).toBeVisible();
+    await page.getByLabel('Layout view').selectOption('quad');
+    await expect(page.getByLabel('Block in slot s1')).toHaveValue('places');
+    saved = statePut(page);
+    await page.getByRole('button', {name: 'Reset view'}).click();
+    await saved;
+    await page.reload();
+    await expect(page.getByLabel('Block in slot s1')).toHaveValue('world-map');
+  });
+
+  test('an ad-hoc copy is dropped when the approved view changes', async ({
+    connectedPage: page,
+    request,
+  }) => {
+    await page.goto('/?mode=layout&view=quad');
+    await expect(page.locator('.source-badge.service')).toBeVisible();
+    await page.getByLabel('Signed in as').selectOption('pat');
+    // Wait until Pat's own layouts are showing (the pilot can't see Quad).
+    await expect(page.getByLabel('Layout view').locator('option', {hasText: 'Quad'})).toHaveCount(0);
+    await page.getByLabel('Layout view').selectOption('nav-detail');
+    const saved = statePut(page);
+    await page.getByLabel('Block in slot s2').selectOption('world-map');
+    await saved;
+
+    // Meanwhile an editor (Alice, via the API) changes the approved view,
+    // bumping its revision — Pat's copy was based on the old one.
+    const ws = await page.evaluate(() => localStorage.getItem('ff.workspace'));
+    const alice = await api(request, 'admin', ws!);
+    const {views} = await (await alice.get()).json();
+    const navDetail = views.find((v: {id: string}) => v.id === 'nav-detail');
+    expect((await alice.put({...navDetail, name: 'Map + detail v2'})).status()).toBe(200);
+
+    await page.reload();
+    await expect(page.getByLabel('Signed in as')).toHaveValue('pat');
+    await expect(page.getByLabel('Layout view').locator('option:checked')).toHaveText('Map + detail v2');
+    // Back to the approved layout: the map in s1, Places in s2.
+    await expect(page.getByLabel('Block in slot s1')).toHaveValue('world-map');
+    await expect(page.getByLabel('Block in slot s2')).toHaveValue('places');
   });
 });

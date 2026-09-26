@@ -1,8 +1,7 @@
 # @ff/layout-service configuration.
 #
-# Roles are a PROTOTYPE stand-in for identity: the host sends the chosen role in
-# an `X-FF-Role` header, and nothing authenticates it. A real deployment would
-# derive the role from an authenticated session (OIDC claims, etc.).
+# Identity: every request carries a signed token (JWT) whose claims give the
+# user, their role and their workspace. The service trusts only the token.
 
 # Where to discover plugins. Their typed ports are needed to validate wiring
 # and CEL expressions on save.
@@ -11,6 +10,21 @@ registry: http://localhost:5180
 # Workspaces' layouts are persisted as one JSON file each under this directory
 # (relative to this package). Set FF_LAYOUT_EPHEMERAL=1 to keep them in memory.
 dataDir: .data
+
+auth:
+  # DEV ONLY: POST /v1/auth/dev-login issues a token for any user below, with
+  # no password. In production, replace this with an OIDC identity provider and
+  # map its claims to a role and workspace.
+  mode: dev
+  # HS256 signing secret. Override with FF_LAYOUT_JWT_SECRET (and never ship
+  # this default).
+  secret: dev-only-insecure-secret
+  tokenTtlHours: 12
+  defaultUser: alice
+  users:
+    alice: {name: Alice, role: admin}
+    pat: {name: Pat, role: pilot}
+    andy: {name: Andy, role: analyst}
 
 defaultRole: admin
 roles:

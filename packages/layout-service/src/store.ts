@@ -2,10 +2,21 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {DEFAULT_BLOCKS, DEFAULT_VIEWS, type BlockRegistry, type LayoutView} from '@ff/layout-model';
 
+/**
+ * One user's ad-hoc changes in a workspace: their per-view copies (swapped
+ * slots; each copy keeps the `rev` of the approved view it was based on) and
+ * blocks they created in user mode. Never shared with other users.
+ */
+export interface UserState {
+  liveByView: Record<string, LayoutView>;
+  blocks: BlockRegistry;
+}
+
 /** Everything saved for one workspace. */
 export interface Workspace {
   views: LayoutView[];
   blocks: BlockRegistry;
+  userState?: Record<string, UserState>;
 }
 
 const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,64}$/;

@@ -5,7 +5,8 @@ import {Hono, type Context} from 'hono';
 import {cors} from 'hono/cors';
 import {validateLayout, type Block, type BlockRegistry, type LayoutView} from '@ff/layout-model';
 import {loadConfig} from './config';
-import {WorkspaceStore, isWorkspaceId, type Workspace} from './store';
+import {WorkspaceStore, isWorkspaceId, type UserState, type Workspace} from './store';
+import {issueToken, verifyBearer} from './auth';
 import {AppCatalog} from './apps';
 
 const PKG_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -20,16 +21,21 @@ const store = new WorkspaceStore(
 const catalog = new AppCatalog(config.registry);
 
 /**
- * Who's asking. PROTOTYPE: the role and workspace come from request headers
- * that nothing authenticates — a real deployment derives them from a session.
+ * Who's asking: taken *only* from the verified token's claims (user, role,
+ * workspace) — never from anything else the client sends.
  */
-function caller(c: Context) {
-  const role = c.req.header('X-FF-Role') ?? config.defaultRole;
-  const workspace = c.req.header('X-FF-Workspace') ?? 'default';
-  const roleConfig = config.roles[role];
-  if (!roleConfig) return {error: c.json({error: `Unknown role “${role}”`}, 400)};
-  if (!isWorkspaceId(workspace)) return {error: c.json({error: 'Invalid workspace id'}, 400)};
-  return {role, workspace, canEdit: Boolean(roleConfig.canEdit)};
+async function caller(c: Context) {
+  const claims = await verifyBearer(config.auth, c.req.header('Authorization'));
+  if (!claims) return {error: c.json({error: 'Sign in required'}, 401)};
+  const roleConfig = config.roles[claims.role];
+  if (!roleConfig || !isWorkspaceId(claims.ws)) return {error: c.json({error: 'Invalid token'}, 401)};
+  return {
+    user: claims.sub,
+    name: claims.name,
+    role: claims.role,
+    workspace: claims.ws,
+    canEdit: Boolean(roleConfig.canEdit),
+  };
 }
 
 /** A workspace as one role sees it: editors see every view, others their own. */
@@ -48,13 +54,90 @@ app.use(
   cors({
     origin: '*',
     allowMethods: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'X-FF-Role', 'X-FF-Workspace'],
+    allowHeaders: ['Content-Type', 'Authorization'],
   }),
 );
 
 app.get('/', (c) =>
-  c.json({service: '@ff/layout-service', endpoints: ['/v1/roles', '/v1/layouts', '/v1/validate']}),
+  c.json({
+    service: '@ff/layout-service',
+    endpoints: ['/v1/auth', '/v1/me', '/v1/me/state', '/v1/roles', '/v1/layouts', '/v1/validate'],
+  }),
 );
+
+// ---- Identity ----
+
+/** How to sign in. In dev mode, the configured users (there's no password). */
+app.get('/v1/auth', (c) =>
+  c.json({
+    mode: config.auth.mode,
+    defaultUser: config.auth.defaultUser,
+    users: Object.entries(config.auth.users).map(([id, u]) => ({
+      id,
+      name: u.name,
+      role: u.role,
+      roleLabel: config.roles[u.role].label,
+    })),
+  }),
+);
+
+/**
+ * DEV ONLY: issue a token for a configured user, in a workspace. Stands in for
+ * an identity provider's login; production would use OIDC instead.
+ */
+app.post('/v1/auth/dev-login', async (c) => {
+  const {user, workspace = 'default'} = await c.req
+    .json<{user?: string; workspace?: string}>()
+    .catch(() => ({}) as {user?: string; workspace?: string});
+  if (!user || !config.auth.users[user]) return c.json({error: 'Unknown user'}, 400);
+  if (!isWorkspaceId(workspace)) return c.json({error: 'Invalid workspace id'}, 400);
+  return c.json({token: await issueToken(config.auth, user, workspace)});
+});
+
+app.get('/v1/me', async (c) => {
+  const who = await caller(c);
+  if ('error' in who) return who.error;
+  return c.json({
+    user: {id: who.user, name: who.name},
+    role: who.role,
+    roleLabel: config.roles[who.role].label,
+    canEdit: who.canEdit,
+    workspace: who.workspace,
+  });
+});
+
+const EMPTY_STATE: UserState = {liveByView: {}, blocks: {}};
+const MAX_STATE_BYTES = 256 * 1024;
+
+/** This user's ad-hoc changes in this workspace (private to them). */
+app.get('/v1/me/state', async (c) => {
+  const who = await caller(c);
+  if ('error' in who) return who.error;
+  const ws = await store.get(who.workspace);
+  return c.json(ws.userState?.[who.user] ?? EMPTY_STATE);
+});
+
+app.put('/v1/me/state', async (c) => {
+  const who = await caller(c);
+  if ('error' in who) return who.error;
+  const text = await c.req.text();
+  if (text.length > MAX_STATE_BYTES) return c.json({error: 'State too large'}, 413);
+  let state: UserState;
+  try {
+    state = JSON.parse(text) as UserState;
+  } catch {
+    return c.json({error: 'Invalid JSON'}, 400);
+  }
+  if (!state || typeof state.liveByView !== 'object' || typeof state.blocks !== 'object') {
+    return c.json({error: 'Expected {liveByView, blocks}'}, 400);
+  }
+  const ws = await store.get(who.workspace);
+  await store.put(who.workspace, {
+    ...ws,
+    userState: {...ws.userState, [who.user]: {liveByView: state.liveByView, blocks: state.blocks}},
+  });
+  return c.body(null, 204);
+});
 
 app.get('/v1/roles', (c) =>
   c.json({
@@ -64,7 +147,7 @@ app.get('/v1/roles', (c) =>
 );
 
 app.get('/v1/layouts', async (c) => {
-  const who = caller(c);
+  const who = await caller(c);
   if ('error' in who) return who.error;
   return c.json(visibleTo(await store.get(who.workspace), who.role, who.canEdit));
 });
@@ -133,7 +216,7 @@ function conflictsFor(ws: Workspace, body: SaveBody): Conflict[] {
 }
 
 app.put('/v1/layouts/views/:id', async (c) => {
-  const who = caller(c);
+  const who = await caller(c);
   if ('error' in who) return who.error;
   if (!who.canEdit) return c.json({error: `Role “${who.role}” can’t edit layouts`}, 403);
   const body = await c.req.json<SaveBody>();
@@ -166,6 +249,7 @@ app.put('/v1/layouts/views/:id', async (c) => {
   const current = ws.views.find((v) => v.id === view.id);
   const saved = {...view, rev: (current?.rev ?? 0) + 1};
   const next: Workspace = {
+    ...ws,
     blocks,
     views: current ? ws.views.map((v) => (v.id === view.id ? saved : v)) : [...ws.views, saved],
   };
@@ -174,7 +258,7 @@ app.put('/v1/layouts/views/:id', async (c) => {
 });
 
 app.delete('/v1/layouts/views/:id', async (c) => {
-  const who = caller(c);
+  const who = await caller(c);
   if ('error' in who) return who.error;
   if (!who.canEdit) return c.json({error: `Role “${who.role}” can’t edit layouts`}, 403);
   const ws = await store.get(who.workspace);
@@ -199,10 +283,13 @@ app.delete('/v1/layouts/views/:id', async (c) => {
 });
 
 app.post('/v1/layouts/reset', async (c) => {
-  const who = caller(c);
+  const who = await caller(c);
   if ('error' in who) return who.error;
   if (!who.canEdit) return c.json({error: `Role “${who.role}” can’t edit layouts`}, 403);
-  const next = store.seed(await store.get(who.workspace));
+  const previous = await store.get(who.workspace);
+  // Users' ad-hoc copies survive a reset; they're dropped client-side because
+  // the views they were based on now have new revisions.
+  const next = {...store.seed(previous), userState: previous.userState};
   await store.put(who.workspace, next);
   return c.json(visibleTo(next, who.role, who.canEdit));
 });
