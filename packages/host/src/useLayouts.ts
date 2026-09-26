@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useLayoutEffect, useMemo, useState} from 'preact/hooks';
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'preact/hooks';
 import type {BlockSettings} from '@ff/protocol';
 import {
   DEFAULT_BLOCKS,
@@ -21,12 +21,16 @@ import {
   type ValidationError,
 } from '@ff/layout-model';
 import {
+  AuthExpired,
   LayoutClient,
   LayoutConflict,
   LayoutRejected,
   type Conflict,
+  type DevUser,
+  type Me,
   type Role,
   type ServedLayouts,
+  type UserState,
 } from './layoutClient';
 
 const STORAGE_KEY = 'ff.layouts.v2';
@@ -104,7 +108,13 @@ function store(stored: Stored): void {
   }
 }
 
-const ROLE_KEY = 'ff.role';
+const USER_KEY = 'ff.user';
+/**
+ * The session token. localStorage is the prototype's choice (plugins are
+ * cross-origin iframes, so they can't read it); production would prefer an
+ * httpOnly cookie from the identity provider.
+ */
+const TOKEN_KEY = 'ff.token';
 const WORKSPACE_KEY = 'ff.workspace';
 
 function readPref(key: string): string | null {
@@ -165,16 +175,17 @@ export function useLayouts(initialViewId: string | null) {
   const {views} = saved;
   const [activeViewId, setActiveViewId] = useState<string>(initialViewId ?? '');
 
-  // ---- Source: the layout service, per role + workspace; or local fallback ----
+  // ---- Source: the layout service (signed in), or local fallback ----
   const [source, setSource] = useState<LayoutSource>('loading');
   const [roles, setRoles] = useState<Role[]>([]);
-  const [role, setRoleState] = useState<string | null>(null);
+  const [users, setUsers] = useState<DevUser[]>([]);
+  const [session, setSession] = useState<{token: string; me: Me} | null>(null);
   const [canEdit, setCanEdit] = useState(true);
   const [workspace] = useState(() => {
     const ws = readPref(WORKSPACE_KEY);
     return ws && /^[A-Za-z0-9_-]{1,64}$/.test(ws) ? ws : 'default';
   });
-  const client = useMemo(() => (role ? new LayoutClient(role, workspace) : null), [role, workspace]);
+  const client = useMemo(() => (session ? new LayoutClient(session.token) : null), [session]);
   const [saveErrors, setSaveErrors] = useState<ValidationError[]>([]);
   /** A save lost a race with another editor: what changed, and their latest. */
   const [conflict, setConflict] = useState<{conflicts: Conflict[]; current: ServedLayouts} | null>(
@@ -187,23 +198,49 @@ export function useLayouts(initialViewId: string | null) {
     setSaved(load());
     setCanEdit(true);
     setRoles([]);
+    setUsers([]);
   }, []);
 
-  // Which roles exist, and ours (remembered per viewer; else the default).
+  /** DEV sign-in as a configured user (stands in for an identity provider). */
+  const signInAs = useCallback(
+    async (userId: string) => {
+      const token = await LayoutClient.devLogin(userId, workspace);
+      const me = await new LayoutClient(token).me();
+      writePref(TOKEN_KEY, token);
+      writePref(USER_KEY, userId);
+      return {token, me};
+    },
+    [workspace],
+  );
+
+  // Sign in: reuse a stored token if it's still valid for this workspace;
+  // otherwise (dev) sign in as the remembered user, or the default one.
   useEffect(() => {
     let cancelled = false;
-    LayoutClient.roles()
-      .then(({defaultRole, roles}) => {
+    void (async () => {
+      try {
+        const [auth, {roles}] = await Promise.all([LayoutClient.auth(), LayoutClient.roles()]);
         if (cancelled) return;
+        setUsers(auth.users);
         setRoles(roles);
-        const preferred = readPref(ROLE_KEY);
-        setRoleState(roles.some((r) => r.id === preferred) ? preferred : defaultRole);
-      })
-      .catch(() => !cancelled && goLocal());
+        const stored = readPref(TOKEN_KEY);
+        const me = stored ? await new LayoutClient(stored).me().catch(() => null) : null;
+        if (me && stored && me.workspace === workspace) {
+          if (!cancelled) setSession({token: stored, me});
+          return;
+        }
+        const preferred = readPref(USER_KEY);
+        const user = auth.users.some((u) => u.id === preferred) ? preferred! : auth.defaultUser;
+        const next = await signInAs(user);
+        if (!cancelled) setSession(next);
+      } catch {
+        if (!cancelled) goLocal();
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [goLocal]);
+  }, [goLocal, signInAs, workspace]);
 
   const applyServed = useCallback((served: ServedLayouts) => {
     setSaved({views: served.views, blocks: served.blocks});
@@ -211,22 +248,67 @@ export function useLayouts(initialViewId: string | null) {
     setSource('service');
   }, []);
 
-  // The layouts this role may see, whenever the role changes.
-  useEffect(() => {
-    if (!client) return;
-    let cancelled = false;
-    client
-      .load()
-      .then((served) => !cancelled && applyServed(served))
-      .catch(() => !cancelled && goLocal());
-    return () => {
-      cancelled = true;
-    };
-  }, [client, applyServed, goLocal]);
   const [liveByView, setLiveByView] = useState<Record<string, LayoutView>>({});
   const [enlargement, setEnlargement] = useState<Enlargement | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const updateDraftView = useDraftViewUpdater(setDraft);
+  /** Blocks this user created in user mode (service mode: private to them). */
+  const [adHocBlocks, setAdHocBlocks] = useState<BlockRegistry>({});
+
+  // Per-user state sync: what was last loaded/sent (null until loaded, so
+  // nothing is written before the user's saved state has been read), and a
+  // queue so writes land in order.
+  const stateSent = useRef<string | null>(null);
+  const stateQueue = useRef<Promise<void>>(Promise.resolve());
+
+  // For the signed-in user: the layouts their role may see, plus their own
+  // ad-hoc changes — loaded together so a user switch can't mix them up.
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+    stateSent.current = null;
+    void (async () => {
+      try {
+        const served = await client.load();
+        const state: UserState = await client
+          .getState()
+          .catch(() => ({liveByView: {}, blocks: {}}));
+        if (cancelled) return;
+        // Keep only copies still based on the current approved revision.
+        const liveByView = Object.fromEntries(
+          Object.entries(state.liveByView).filter(
+            ([id, live]) => served.views.find((v) => v.id === id)?.rev === live.rev,
+          ),
+        );
+        applyServed(served);
+        setLiveByView(liveByView);
+        setAdHocBlocks(state.blocks ?? {});
+        stateSent.current = JSON.stringify({liveByView, blocks: state.blocks ?? {}});
+      } catch (error) {
+        if (cancelled) return;
+        if (error instanceof AuthExpired && session) {
+          // Expired or revoked: sign in again as the same user.
+          writePref(TOKEN_KEY, '');
+          signInAs(session.me.user.id).then(setSession, goLocal);
+        } else {
+          goLocal();
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, session, applyServed, goLocal, signInAs]);
+
+  // Save the user's ad-hoc changes whenever they change (service mode).
+  useEffect(() => {
+    if (source !== 'service' || !client || stateSent.current === null) return;
+    const state: UserState = {liveByView, blocks: adHocBlocks};
+    const json = JSON.stringify(state);
+    if (json === stateSent.current) return;
+    stateSent.current = json;
+    stateQueue.current = stateQueue.current.then(() => client.putState(state)).catch(() => {});
+  }, [liveByView, adHocBlocks, source, client]);
 
   // Local mode only. Persist in the commit (a layout effect), not after paint:
   // a plain effect can lose the write if the page is reloaded right after Save.
@@ -239,7 +321,11 @@ export function useLayouts(initialViewId: string | null) {
   /** What's on screen: the draft while editing, else the live copy. */
   const view = draft?.view ?? live;
   /** The block registry in effect (the draft's while editing). */
-  const blocks = draft?.blocks ?? saved.blocks;
+  const savedWithAdHoc = useMemo(
+    () => ({...saved.blocks, ...adHocBlocks}),
+    [saved.blocks, adHocBlocks],
+  );
+  const blocks = draft?.blocks ?? savedWithAdHoc;
   const resolved = useMemo(
     () => resolveSlots(view, draft ? null : enlargement),
     [view, draft, enlargement],
@@ -280,13 +366,14 @@ export function useLayouts(initialViewId: string | null) {
       const ids = [...Object.keys(blocks), ...views.flatMap((v) => v.slots.map((s) => s.blockId ?? ''))];
       const id = newBlockId(appId, ids);
       const block: Block = {id, appId, label: `${appName} ${id.split('~')[1]}`};
-      // A new block is harmless until referenced, so in user mode it's added to
-      // the saved registry straight away (only the slot assignment is ad hoc).
+      // In edit mode it joins the draft. In user mode it's this user's own: with
+      // the service, kept in their private state; locally, in the registry.
       if (draft) setDraft((d) => d && {...d, blocks: {...d.blocks, [id]: block}});
+      else if (source === 'service') setAdHocBlocks((b) => ({...b, [id]: block}));
       else setSaved((s) => ({...s, blocks: {...s.blocks, [id]: block}}));
       updateView((v) => assignBlock(v, slotId, id));
     },
-    [blocks, views, draft, updateView],
+    [blocks, views, draft, updateView, source],
   );
 
   /** Edit a block's label/settings (edit mode only; takes effect live). */
@@ -385,16 +472,24 @@ export function useLayouts(initialViewId: string | null) {
 
   const restoreSlot = useCallback(() => setEnlargement(null), []);
 
-  /** Switch role (service mode): reloads the layouts that role may see. */
-  const setRole = useCallback((next: string) => {
-    writePref(ROLE_KEY, next);
-    setRoleState(next);
-    setDraft(null);
-    setLiveByView({});
-    setEnlargement(null);
-    setSaveErrors([]);
-    setConflict(null);
-  }, []);
+  /** DEV: sign in as another user — reloads their role's views and their own state. */
+  const switchUser = useCallback(
+    async (userId: string) => {
+      const next = await signInAs(userId);
+      stateSent.current = null;
+      // Back to "loading" until this user's layouts and state arrive, so
+      // nothing can be changed against the previous user's layout meanwhile.
+      setSource('loading');
+      setDraft(null);
+      setLiveByView({});
+      setAdHocBlocks({});
+      setEnlargement(null);
+      setSaveErrors([]);
+      setConflict(null);
+      setSession(next);
+    },
+    [signInAs],
+  );
 
   /** Which roles may use the view being edited (service mode). */
   const setViewRoles = useCallback(
@@ -563,8 +658,9 @@ export function useLayouts(initialViewId: string | null) {
     ready: source !== 'loading',
     source,
     roles,
-    role,
-    setRole,
+    users,
+    me: session?.me ?? null,
+    switchUser,
     canEdit,
     saveErrors,
     conflict: conflict?.conflicts ?? null,

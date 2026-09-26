@@ -27,6 +27,32 @@ export class LayoutRejected extends Error {
   }
 }
 
+/** The token was missing, expired or rejected: sign in again. */
+export class AuthExpired extends Error {}
+
+/** A user one can sign in as (dev mode lists them; there's no password). */
+export interface DevUser {
+  id: string;
+  name: string;
+  role: string;
+  roleLabel: string;
+}
+
+/** Who the current token says we are. */
+export interface Me {
+  user: {id: string; name: string};
+  role: string;
+  roleLabel: string;
+  canEdit: boolean;
+  workspace: string;
+}
+
+/** A user's private ad-hoc changes (see the service's UserState). */
+export interface UserState {
+  liveByView: Record<string, LayoutView>;
+  blocks: BlockRegistry;
+}
+
 /** One entity another editor changed since this edit began. */
 export interface Conflict {
   kind: 'view' | 'block';
@@ -49,19 +75,46 @@ export class LayoutConflict extends Error {
 }
 
 /**
- * Client for `@ff/layout-service`. Role and workspace travel as headers — a
- * PROTOTYPE stand-in for an authenticated session.
+ * Client for `@ff/layout-service`, acting as the user a signed token names.
+ * The service derives user, role and workspace from the token alone.
  */
 export class LayoutClient {
-  constructor(
-    readonly role: string,
-    readonly workspace: string,
-  ) {}
+  constructor(readonly token: string) {}
+
+  /** How to sign in (dev mode: the users one can pick). */
+  static async auth(): Promise<{mode: 'dev'; defaultUser: string; users: DevUser[]}> {
+    const res = await fetch(`${SERVICE_URL}/v1/auth`);
+    if (!res.ok) throw new Error(`layout service ${res.status}`);
+    return res.json();
+  }
+
+  /** DEV ONLY: get a token for a configured user (stands in for an IdP login). */
+  static async devLogin(user: string, workspace: string): Promise<string> {
+    const res = await fetch(`${SERVICE_URL}/v1/auth/dev-login`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({user, workspace}),
+    });
+    if (!res.ok) throw new Error(`sign-in failed (${res.status})`);
+    return (await res.json()).token;
+  }
 
   static async roles(): Promise<{defaultRole: string; roles: Role[]}> {
     const res = await fetch(`${SERVICE_URL}/v1/roles`);
     if (!res.ok) throw new Error(`layout service ${res.status}`);
     return res.json();
+  }
+
+  me(): Promise<Me> {
+    return this.call('GET', '/v1/me') as Promise<unknown> as Promise<Me>;
+  }
+
+  getState(): Promise<UserState> {
+    return this.call('GET', '/v1/me/state') as Promise<unknown> as Promise<UserState>;
+  }
+
+  async putState(state: UserState): Promise<void> {
+    await this.call('PUT', '/v1/me/state', state);
   }
 
   load(): Promise<ServedLayouts> {
@@ -98,13 +151,13 @@ export class LayoutClient {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'X-FF-Role': this.role,
-        'X-FF-Workspace': this.workspace,
+        Authorization: `Bearer ${this.token}`,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
     if (res.ok) return json as ServedLayouts;
+    if (res.status === 401) throw new AuthExpired(json.error ?? 'Sign in required');
     if (res.status === 409 && json.current) {
       throw new LayoutConflict(json.error, json.conflicts ?? [], json.current as ServedLayouts);
     }

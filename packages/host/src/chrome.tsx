@@ -545,7 +545,7 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
                   );
                 })}
               </div>
-              {layoutMode && (
+              {layoutMode && layouts.ready && (
                 <SlotLayer
                   layouts={layouts}
                   apps={apps}

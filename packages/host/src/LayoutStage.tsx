@@ -53,17 +53,17 @@ export function LayoutBar({layouts}: {layouts: Layouts}) {
     return (
       <div className="layout-bar">
         <SourceBadge layouts={layouts} />
-        {layouts.source === 'service' && (
-          <label className="layout-field">
-            Role
+        {layouts.source === 'service' && layouts.me && (
+          <label className="layout-field" title="Dev sign-in: pick a configured user (no password)">
+            Signed in as
             <select
-              aria-label="Role"
-              value={layouts.role ?? ''}
-              onChange={(e) => layouts.setRole(e.currentTarget.value)}
+              aria-label="Signed in as"
+              value={layouts.me.user.id}
+              onChange={(e) => void layouts.switchUser(e.currentTarget.value)}
             >
-              {layouts.roles.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.label}
+              {layouts.users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({u.roleLabel})
                 </option>
               ))}
             </select>

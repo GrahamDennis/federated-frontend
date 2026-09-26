@@ -49,9 +49,11 @@ packages/
                     another block's command (authority comes from the wiring).
   layout-model/            The layout model shared by host and service: views,
                     blocks, wiring, CEL expressions and validation (pure TS).
-  layout-service/   :5181  Serves saved layouts per workspace and role, lets
-                    only editor roles save, and validates every save (CEL type
-                    checks, wiring, geometry) with the shared model.
+  layout-service/   :5181  Serves saved layouts per workspace and role to
+                    signed-in users (JWTs; dev sign-in stands in for OIDC), lets
+                    only editor roles save, validates every save (CEL type
+                    checks, wiring, geometry) with the shared model, and keeps
+                    each user's own ad-hoc changes.
   plugin-registry/  :5180  Plugin distribution + discovery. Packages plugins as
                     ORAS-style OCI artifacts and serves them: a dumb
                     content-addressed endpoint (/content/<repo>@<digest>/) plus a
@@ -196,7 +198,8 @@ non-overlapping **slots**, and each slot shows one app:
 - **Edit mode** (✎ Edit layouts). Set the grid size, drag slots to move them,
   drag the corner handle to resize, click `+` on an empty cell to add a slot, set
   each slot's default app, and create, duplicate, rename, or delete views. Saved
-  views are served by the **layout service** per workspace and role (only
+  views are served by the **layout service** to signed-in users, per workspace
+  and role (only
   editor roles can edit, every save is validated server-side, and concurrent
   edits to the same view or block are detected rather than lost). If the
   service is unreachable, they're kept in localStorage instead.
@@ -332,13 +335,16 @@ exercising the cross-origin channels rather than mocking them:
   (pure); in the Quick actions view: a value button driving every wired block,
   a command button running the detail map's command, and authoring (command
   chips, and a command that can't run being reported).
-- `tests/layout-service.spec.ts` — the service API (per-role views, editing
+- `tests/layout-service.spec.ts` — the service API (signed-in sessions, per-role views, editing
   restricted to editor roles, isolated workspaces, and server-side validation
   of CEL types, wiring and geometry) and the host against it (switching role,
   choosing which roles see a view, a rejected save keeping the draft open, and
   falling back to local storage when the service is unreachable); optimistic
   concurrency (stale saves and deletes conflict, edits to different views or
-  blocks don't, and both conflict resolutions across two editor tabs).
+  blocks don't, and both conflict resolutions across two editor tabs);
+  identity (only a valid token counts: no or tampered tokens get 401 and role
+  headers are ignored); and per-user state (private per user, following them
+  across reloads, and dropped when the approved view changes).
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.

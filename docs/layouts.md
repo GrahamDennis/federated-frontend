@@ -245,6 +245,9 @@ configured by `layout-service.config.yaml`):
 
 | Endpoint | Who | What |
 |---|---|---|
+| `GET /v1/auth`, `POST /v1/auth/dev-login` | anyone | How to sign in; **dev only**: get a token for a configured user (no password) |
+| `GET /v1/me` | signed in | Who the token says you are: user, role, workspace |
+| `GET`/`PUT /v1/me/state` | signed in | Your own ad-hoc changes in this workspace (private to you) |
 | `GET /v1/roles` | anyone | The roles and which of them can edit |
 | `GET /v1/layouts` | any role | That role's views plus the block registry. Editors see every view; other roles see views whose `roles` include them |
 | `PUT /v1/layouts/views/:id` | editors | Save a view plus the blocks the edit changed or deleted, **after conflict and validation checks**: `409` if someone else changed them first, `422` with errors if invalid |
@@ -261,12 +264,38 @@ file each under `.data/`, or in memory with `FF_LAYOUT_EPHEMERAL=1`. A new
 workspace is seeded from the model's defaults. The e2e tests give each test its
 own workspace, so tests running in parallel don't see each other's saves.
 
-**Identity is a prototype.** The host sends the chosen role and workspace as
-`X-FF-Role` / `X-FF-Workspace` headers, and nothing authenticates them. A real
-deployment would derive both from an authenticated session (e.g. OIDC claims)
-and enforce them in the service. The service is already the point of
-enforcement: editing is refused (`403`) for roles without `canEdit`, whatever
-the UI shows.
+**Identity: signed tokens.** Every request carries a JWT (HS256) whose claims
+give the user, their role and their workspace. The service derives all three
+*only* from a verified token: a missing, expired or tampered token gets `401`,
+and nothing else the client sends (such as a role header) has any effect.
+Editing is refused (`403`) for roles without `canEdit`, whatever the UI shows.
+
+**Dev sign-in is a stand-in.** Tokens are issued by `POST /v1/auth/dev-login`
+for users configured in `layout-service.config.yaml`: Alice (admin), Pat
+(pilot) and Andy (analyst). There's no password. In the host, "Signed in as"
+switches user, and with no token it signs in as the configured default user.
+For production:
+
+- replace dev login with an OIDC identity provider, and map its claims to role
+  and workspace;
+- set a real `FF_LAYOUT_JWT_SECRET`, or verify the provider's asymmetric keys;
+- prefer an httpOnly cookie to the prototype's localStorage token. Plugins are
+  cross-origin iframes, so they can't read the host's localStorage either way.
+
+The service-side authorization stays as it is.
+
+**Per-user state.** Each user's ad-hoc changes are stored privately per
+workspace (`/v1/me/state`) and follow them across reloads and devices:
+
+- their per-view copies (swapped slots);
+- blocks they created in user mode.
+
+A copy keeps the `rev` of the approved view it was based on. When an editor
+changes that view, the stale copy is dropped on the user's next load, and they
+see the new approved layout. "Reset view" clears the copy. Changes are sent in
+order, and only when they differ from what was last saved. While switching
+user, layouts go back to loading, so nothing can be changed against the
+previous user's layout.
 
 **Server-side validation** runs `validateLayout` from `@ff/layout-model`, the
 same code the host uses:
@@ -304,8 +333,7 @@ In the editor, a conflict shows what changed, with two options:
 **Fallback.** If the service can't be reached, the host shows **"○ Local only"**
 and uses this browser's localStorage, which was the only mode before the
 service existed. The shared model is the same either way. In local mode there
-are no roles, and ad-hoc per-user changes aren't stored on the server in
-either mode.
+are no users or roles, and nothing is shared.
 
 ## Action buttons
 
@@ -374,10 +402,10 @@ Still to do:
 
 ## Known gaps
 
-- Roles and workspaces are unauthenticated headers (see "Layout service"
-  above). Real identity is the main thing between this and production use.
-- Per-user ad-hoc changes (a swapped slot, a block created in user mode) live
-  only in the page. They aren't saved per user on the server.
+- Sign-in is dev-only: configured users and no password (see "Layout
+  service"). A real identity provider (OIDC) is the step before production.
+- Enlarged or maximized slots aren't part of the saved per-user state, by
+  design (they're momentary).
 - Conflicts are resolved per entity (keep mine or take theirs). There's no
   field-level merge, and no live notification that someone else is editing.
 - Ad-hoc slot changes aren't encoded in the URL. Only the view id is.
