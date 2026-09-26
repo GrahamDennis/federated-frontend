@@ -1,5 +1,6 @@
 import {useEffect, useState} from 'react';
 import type {Host} from '@ff/plugin-sdk-react/connect';
+import {useHostInputs} from '@ff/plugin-sdk-react/settings';
 import type {SelectedPlace} from '@ff/protocol';
 
 /**
@@ -9,7 +10,14 @@ import type {SelectedPlace} from '@ff/protocol';
  * value comes from being composed *beside* the map and bound to the same data.
  */
 export function PlacesApp({host}: {host?: Host}) {
-  const [selected, setSelected] = useState<SelectedPlace | null>(null);
+  const [contextSelected, setSelected] = useState<SelectedPlace | null>(null);
+  // In a wired layout the author can connect our `place` input to any block's
+  // place output; that then replaces the shared selection.
+  const inputs = useHostInputs(host);
+  const wired = 'place' in inputs;
+  const selected = wired
+    ? ((inputs.place as SelectedPlace | null) ?? null)
+    : contextSelected;
   const [notes, setNotes] = useState<Record<string, string>>({});
 
   // Reflect the shared selection.
@@ -55,6 +63,7 @@ export function PlacesApp({host}: {host?: Host}) {
         <span className={`places-badge ${host ? 'hosted' : ''}`}>
           {host ? 'detail' : 'standalone'}
         </span>
+        {wired && <span className="places-badge wired">wired</span>}
       </div>
 
       {selected ? (
@@ -83,7 +92,7 @@ export function PlacesApp({host}: {host?: Host}) {
               placeholder={`Jot a note about ${selected.name}…`}
             />
           </label>
-          {host && (
+          {host && !wired && (
             <button
               className="clear-btn"
               onClick={() => void host.setContext({selectedPlace: null})}
@@ -94,7 +103,9 @@ export function PlacesApp({host}: {host?: Host}) {
         </div>
       ) : (
         <p className="places-empty">
-          {host
+          {wired
+            ? 'Nothing selected upstream yet.'
+            : host
             ? 'No place selected. Pick a city in the map and its details appear here.'
             : 'Running standalone — there is no shared selection. Dock this panel beside the map to reflect what it selects.'}
         </p>

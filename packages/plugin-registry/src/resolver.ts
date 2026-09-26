@@ -25,6 +25,8 @@ function normaliseManifest(raw: Partial<PluginManifest>, key: string): PluginMan
     detailApps: raw.detailApps,
     detail: raw.detail,
     settings: raw.settings,
+    inputs: raw.inputs,
+    outputs: raw.outputs,
   };
 }
 

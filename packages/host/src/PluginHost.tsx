@@ -74,6 +74,11 @@ export function PluginHost({instanceId, appId, src, active}: PluginHostProps) {
       getSettings: async () => chromeRef.current.getInstanceSettings(instanceId),
       subscribeSettings: async (listener) =>
         track(chromeRef.current.subscribeInstanceSettings(instanceId, listener)),
+      publish: async (output, value) =>
+        chromeRef.current.publishOutput(instanceId, output, value),
+      getInputs: async () => chromeRef.current.getInstanceInputs(instanceId),
+      subscribeInputs: async (listener) =>
+        track(chromeRef.current.subscribeInstanceInputs(instanceId, listener)),
     };
 
     const thread = ThreadWindow.iframe<Record<string, never>, HostThread>(

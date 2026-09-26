@@ -836,3 +836,34 @@ code {
   color: var(--subdued);
   font-size: 11px;
 }
+
+.slot-edit-wire {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--accent);
+}
+.block-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.block-section h4 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--subdued);
+}
+.block-section code,
+.block-field code {
+  font-size: 11px;
+  color: var(--subdued);
+}
+.block-outputs {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text);
+}

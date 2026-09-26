@@ -1,4 +1,4 @@
-import type {BlockSettings} from '@ff/protocol';
+import type {BlockInputs, BlockSettings, PortValue} from '@ff/protocol';
 
 /**
  * The layout model: a fixed grid of cells, carved into rectangular **slots**,
@@ -66,6 +66,19 @@ export interface LayoutView {
   cols: number;
   rows: number;
   slots: Slot[];
+  /** How blocks in this view feed each other (output → input). */
+  bindings?: Binding[];
+}
+
+/**
+ * Wires one block's input to another block's output. Wiring belongs to the
+ * *view* (it's part of the "app" being built), while blocks are shared across
+ * views — so the same block can be wired differently in different views.
+ */
+export interface Binding {
+  blockId: string;
+  input: string;
+  from: {blockId: string; output: string};
 }
 
 /** A temporary run-time enlargement of one slot (covers the slots under it). */
@@ -141,6 +154,26 @@ export const DEFAULT_VIEWS: LayoutView[] = [
       {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 1, blockId: 'world-map~overview'},
       {id: 's2', col: 1, row: 0, colSpan: 2, rowSpan: 2, blockId: 'world-map~detail'},
       {id: 's3', col: 0, row: 1, colSpan: 1, rowSpan: 1, blockId: 'places'},
+    ],
+  },
+  {
+    // An "app builder" composition, wired explicitly rather than through the
+    // shared selection: the overview map's viewport filters the histogram, and
+    // picking a city from the histogram drives the detail map and Places.
+    id: 'explorer',
+    name: 'Explorer (wired)',
+    cols: 4,
+    rows: 2,
+    slots: [
+      {id: 's1', col: 0, row: 0, colSpan: 2, rowSpan: 1, blockId: 'world-map~overview'},
+      {id: 's2', col: 2, row: 0, colSpan: 2, rowSpan: 1, blockId: 'histogram'},
+      {id: 's3', col: 0, row: 1, colSpan: 2, rowSpan: 1, blockId: 'world-map~detail'},
+      {id: 's4', col: 2, row: 1, colSpan: 2, rowSpan: 1, blockId: 'places'},
+    ],
+    bindings: [
+      {blockId: 'histogram', input: 'viewport', from: {blockId: 'world-map~overview', output: 'viewport'}},
+      {blockId: 'world-map~detail', input: 'focus', from: {blockId: 'histogram', output: 'selection'}},
+      {blockId: 'places', input: 'place', from: {blockId: 'histogram', output: 'selection'}},
     ],
   },
 ];
@@ -301,4 +334,39 @@ export function resolveSlots(view: LayoutView, enlargement: Enlargement | null):
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, Math.round(n) || lo));
+}
+
+// ---- Wiring ----
+
+export function bindingFor(view: LayoutView, blockId: string, input: string): Binding | undefined {
+  return view.bindings?.find((b) => b.blockId === blockId && b.input === input);
+}
+
+/** Connect (or, with `from = null`, disconnect) one block input. */
+export function setBinding(
+  view: LayoutView,
+  blockId: string,
+  input: string,
+  from: Binding['from'] | null,
+): LayoutView {
+  const others = (view.bindings ?? []).filter(
+    (b) => !(b.blockId === blockId && b.input === input),
+  );
+  return {...view, bindings: from ? [...others, {blockId, input, from}] : others};
+}
+
+/**
+ * A block's wired inputs in `view`: every bound input is present, holding its
+ * source's latest published value (or null). Unbound inputs are absent.
+ */
+export function resolveInputs(
+  view: LayoutView,
+  blockId: string,
+  outputOf: (blockId: string, output: string) => PortValue | null | undefined,
+): BlockInputs {
+  const inputs: BlockInputs = {};
+  for (const b of view.bindings ?? []) {
+    if (b.blockId === blockId) inputs[b.input] = outputOf(b.from.blockId, b.from.output) ?? null;
+  }
+  return inputs;
 }

@@ -1,0 +1,23 @@
+{
+  "id": "histogram",
+  "name": "City histogram",
+  "version": "0.0.0",
+  "kind": "plugin",
+  "entry": "index.html",
+  "description": "A selection view over a sample dataset of world cities: a population histogram you can brush, filtered by a wired viewport, with a list of matching cities to pick from.",
+  "settings": {
+    "title": {"type": "string", "label": "Title", "default": "Cities by population"},
+    "maxRows": {"type": "number", "label": "Cities to list", "default": 8, "min": 1, "max": 50, "step": 1}
+  },
+  "inputs": {
+    "viewport": {
+      "type": "bbox",
+      "label": "Filter to area",
+      "description": "Only count cities inside this area (e.g. a map's visible area)."
+    }
+  },
+  "outputs": {
+    "selection": {"type": "place", "label": "Picked city"},
+    "range": {"type": "range", "label": "Brushed population range (millions)"}
+  }
+}

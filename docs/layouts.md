@@ -1,8 +1,8 @@
 # Layouts: slot grids, predefined views, and the road to an app builder
 
 Status: prototype implemented in the host (`packages/host/src/layout.ts`,
-`useLayouts.ts`, `LayoutStage.tsx`, `instances.ts`); tests in
-`tests/layout.spec.ts` and `tests/blocks.spec.ts`.
+`useLayouts.ts`, `LayoutStage.tsx`, `instances.ts`, `instanceFeed.ts`); tests in
+`tests/layout.spec.ts`, `tests/blocks.spec.ts` and `tests/wiring.spec.ts`.
 
 ## Why slots and not windows
 
@@ -105,6 +105,65 @@ shared selection, a detail map without city buttons that follows the selection
 at a higher zoom, and Places. Pick a city on the overview and both of the others
 update.
 
+## Wiring blocks together
+
+The shared context is one global bag that every app reads and writes. That's
+fine for a map plus a detail panel, but an app builder needs the author to say
+*which* block feeds *which*. So blocks declare typed **ports** in their manifest:
+
+```json
+"inputs":  {"viewport":  {"type": "bbox",  "label": "Filter to area"}},
+"outputs": {"selection": {"type": "place", "label": "Picked city"},
+            "range":     {"type": "range", "label": "Brushed population range"}}
+```
+
+A view holds **bindings** from one block's output to another block's input.
+Wiring belongs to the view, not the block, so the same block can be wired
+differently in different views:
+
+```ts
+interface Binding { blockId; input; from: {blockId; output} }
+```
+
+At run time:
+
+- A plugin publishes with `host.publish(output, value)`. The host keeps each
+  instance's latest output values.
+- The host resolves each instance's inputs from the active view's bindings and
+  pushes them when they change (`getInputs()` / `subscribeInputs()`; in React,
+  `useHostInputs(host)`). Only wired inputs appear as keys, with `null` until
+  the source publishes. A plugin can therefore tell "not connected" (fall back
+  to its own behaviour) from "connected, nothing yet". Wiring applies only in
+  layout mode; apps mode has none.
+- Plugins never learn who is upstream or downstream. The host is the only
+  router, so plugins stay isolated from each other.
+- Port types are names (`place`, `bbox`, `range`, …) with shapes agreed in
+  `@ff/protocol`. The host treats values as opaque JSON and only uses the type
+  name to decide which outputs may feed which inputs.
+
+In edit mode, the block panel (⚙) lists each input with a drop-down of
+type-compatible outputs from the other blocks in the view, and lists the
+block's outputs. Each slot box summarises its wiring (`⇠ focus ← Histogram.selection`).
+The same panel has **Delete block** for extra instances; it is refused while
+another saved view still uses the block.
+
+A wired input takes precedence over the shared context. For example, the map's
+`focus` input replaces "follow the shared selection", and Places' `place` input
+replaces the shared selected place.
+
+The **"Explorer (wired)"** default view shows the flow:
+
+- The overview map's `viewport` feeds the histogram, which counts only cities
+  in that area.
+- Brushing the histogram narrows its city list, and it publishes the range.
+- Picking a city publishes the histogram's `selection`, which feeds both the
+  detail map's `focus` and Places' `place`.
+
+**Subscribe replay.** A plugin reads, then subscribes, in two separate thread
+round trips, so an update landing in between would be lost. The host therefore
+sends the current value as soon as a plugin subscribes. This applies to
+settings, inputs and the shared context.
+
 ## Towards an "app builder"
 
 An app builder is the same slot model with a palette of **blocks** (map,
@@ -117,22 +176,22 @@ Done:
    keys everything by instance (see "Instances and settings" above).
 2. **Per-instance configuration.** Plugins declare a settings schema, the editor
    renders a form for it, and plugins receive the values live.
+3. **Typed wiring.** Blocks declare inputs and outputs, views bind them, and the
+   host routes values (see "Wiring blocks together" above).
 
 Still to do:
 
-3. **Wiring / derived expressions.** Generalise the shared context from one global
-   bag into **named, typed channels** that blocks declare as inputs and outputs
-   (`map.outputs.selection`, `histogram.inputs.filter`). A view then holds a small
-   dataflow graph:
-   `histogram.filter = where(dataset, field in map.selection.bbox)`. Evaluate the
-   graph in the host (or a worker; see `shared-datamodel.md`). Plugins only see
-   their resolved inputs and publish outputs, so the host stays the broker and
-   plugins stay isolated. Expressions should be a small, sandboxed, pure language
-   (a JSON-logic-style AST or a restricted expression parser), not arbitrary JS.
-4. **Action blocks.** Buttons that invoke another block's exported command (the
+4. **Derived expressions.** Let a binding be an expression over outputs instead
+   of a plain reference, e.g. `buffer(map.selection, 50km)` or
+   `intersect(a.viewport, b.viewport)`. Use a small, sandboxed, pure language
+   (a JSON-logic-style AST or a restricted expression parser), not arbitrary
+   JS. Evaluate it in the host, or in a worker (see `shared-datamodel.md`). It
+   plugs into `resolveInputs`: a binding's source becomes an expression tree
+   whose leaves are block outputs.
+5. **Action blocks.** Buttons that invoke another block's exported command (the
    ⌘K command registry already proxies callbacks across iframes) or write to a
    channel.
-5. **Nested / responsive grids** (optional). A slot could hold a sub-grid, and
+6. **Nested / responsive grids** (optional). A slot could hold a sub-grid, and
    views could declare breakpoints. Leave both out until a use case needs them.
 
 ## Known gaps
@@ -145,7 +204,12 @@ Still to do:
   accessible).
 - A block can occupy only one slot per view at a time. Show the same app twice
   by creating a second block.
-- Unused blocks are never garbage-collected from the registry, and there's no
-  UI to delete a block.
+- Unused blocks aren't garbage-collected automatically. They can be deleted by
+  hand from the block panel.
+- Port types are just names. Nothing validates that a published value matches
+  its declared type.
+- Wiring has no cycle detection. A cycle would only loop if plugins republish
+  on every input change, and none of the examples do.
+- The editor offers only blocks placed in the current view as input sources.
 - The settings schema is deliberately tiny, with no validation beyond the input
   types. It should map onto JSON Schema if it grows.

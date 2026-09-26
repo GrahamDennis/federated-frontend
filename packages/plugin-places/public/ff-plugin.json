@@ -5,5 +5,12 @@
   "kind": "plugin",
   "entry": "index.html",
   "detail": true,
-  "description": "A detail companion: it reflects and annotates the place currently selected in the shared workspace context."
+  "description": "A detail companion: it reflects and annotates the place currently selected in the shared workspace context.",
+  "inputs": {
+    "place": {
+      "type": "place",
+      "label": "Place to show",
+      "description": "When connected, shows this place instead of the shared selection."
+    }
+  }
 }

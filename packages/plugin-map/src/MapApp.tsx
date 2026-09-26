@@ -1,8 +1,8 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import maplibregl from 'maplibre-gl';
 import type {Host} from '@ff/plugin-sdk-react/connect';
-import {useHostSettings} from '@ff/plugin-sdk-react/settings';
-import type {SelectedPlace} from '@ff/protocol';
+import {useHostInputs, useHostSettings} from '@ff/plugin-sdk-react/settings';
+import type {BBox, SelectedPlace} from '@ff/protocol';
 
 interface Place {
   id: string;
@@ -30,6 +30,27 @@ const DEFAULT_SETTINGS = {
 
 const WORLD_VIEW = {center: [10, 30] as [number, number], zoom: 1.4};
 
+/** A rough bounding box for a camera, for when there's no live map to ask. */
+function approxBounds(center: [number, number], zoom: number): BBox {
+  const halfLon = Math.min(180, 360 / 2 ** zoom);
+  const halfLat = Math.min(85, 170 / 2 ** zoom);
+  return {
+    west: center[0] - halfLon,
+    east: center[0] + halfLon,
+    south: Math.max(-85, center[1] - halfLat),
+    north: Math.min(85, center[1] + halfLat),
+  };
+}
+
+function toPlace(selected: SelectedPlace): Place {
+  return {
+    id: selected.id,
+    name: selected.name,
+    center: [selected.longitude, selected.latitude],
+    zoom: selected.zoom ?? 9,
+  };
+}
+
 function homeView(home: string) {
   const place = PLACES.find((p) => p.id === home);
   return place ? {center: place.center, zoom: place.zoom} : WORLD_VIEW;
@@ -54,6 +75,27 @@ export function MapApp({
   const settings = useHostSettings(host, DEFAULT_SETTINGS);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  // Wired inputs (layout mode). A wired `focus` replaces following the shared
+  // selection: the layout author has said exactly what this map should track.
+  const inputs = useHostInputs(host);
+  const focusWiredRef = useRef(false);
+  focusWiredRef.current = 'focus' in inputs;
+  const hostRef = useRef(host);
+  hostRef.current = host;
+
+  // Publish the visible area on the `viewport` output (e.g. to filter a
+  // histogram). Without a live map, approximate it from the camera target.
+  const publishViewport = useCallback((fallback?: {center: [number, number]; zoom: number}) => {
+    let bbox: BBox | null = null;
+    try {
+      const b = mapRef.current?.getBounds();
+      if (b) bbox = {west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth()};
+    } catch {
+      // The map can't report bounds until it has initialised; use the fallback.
+    }
+    if (!bbox && fallback) bbox = approxBounds(fallback.center, fallback.zoom);
+    if (bbox) void hostRef.current?.publish('viewport', bbox);
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -67,6 +109,8 @@ export function MapApp({
         attributionControl: {compact: true},
       });
       mapRef.current = map;
+      map.on('moveend', () => publishViewport());
+      map.on('load', () => publishViewport());
     } catch (error) {
       // e.g. WebGL unavailable. The panel/controls still work (camera no-ops).
       setStatus('Map canvas unavailable in this environment.');
@@ -77,6 +121,11 @@ export function MapApp({
       mapRef.current = null;
     };
   }, []);
+
+  // Publish an initial viewport once connected.
+  useEffect(() => {
+    if (host) publishViewport(homeView(settingsRef.current.home));
+  }, [host, publishViewport]);
 
   // Jump to the configured starting view whenever it changes.
   useEffect(() => {
@@ -90,11 +139,11 @@ export function MapApp({
   const flyCamera = useCallback((place: Place) => {
     if (lastFlownId.current === place.id) return;
     lastFlownId.current = place.id;
-    mapRef.current?.flyTo({
-      center: place.center,
-      zoom: settingsRef.current.flyZoom,
-      essential: true,
-    });
+    const zoom = settingsRef.current.flyZoom;
+    mapRef.current?.flyTo({center: place.center, zoom, essential: true, maxDuration: 2000});
+    // Publish where we're heading straight away (the real bounds follow on
+    // `moveend`, if the map is actually rendering).
+    void hostRef.current?.publish('viewport', approxBounds(place.center, zoom));
     setStatus(`Flying to ${place.name}`);
   }, []);
 
@@ -104,15 +153,15 @@ export function MapApp({
     (place: Place) => {
       flyCamera(place);
       void host?.toast(`🗺️ Flying to ${place.name}`, {tone: 'info'});
-      void host?.setContext({
-        selectedPlace: {
-          id: place.id,
-          name: place.name,
-          longitude: place.center[0],
-          latitude: place.center[1],
-          zoom: place.zoom,
-        },
-      });
+      const selectedPlace: SelectedPlace = {
+        id: place.id,
+        name: place.name,
+        longitude: place.center[0],
+        latitude: place.center[1],
+        zoom: place.zoom,
+      };
+      void host?.setContext({selectedPlace});
+      void host?.publish('selection', selectedPlace);
     },
     [host, flyCamera],
   );
@@ -142,12 +191,8 @@ export function MapApp({
     void (async () => {
       const apply = (selected: SelectedPlace | null | undefined) => {
         if (!selected || !settingsRef.current.followSelection) return;
-        flyCamera({
-          id: selected.id,
-          name: selected.name,
-          center: [selected.longitude, selected.latitude],
-          zoom: selected.zoom ?? 9,
-        });
+        if (focusWiredRef.current) return;
+        flyCamera(toPlace(selected));
       };
       const context = await host.getContext();
       if (!cancelled) apply(context.selectedPlace);
@@ -162,6 +207,12 @@ export function MapApp({
       unsubscribe?.();
     };
   }, [host, flyCamera]);
+
+  // Follow a wired `focus` input.
+  const focus = inputs.focus as SelectedPlace | null | undefined;
+  useEffect(() => {
+    if (focus) flyCamera(toPlace(focus));
+  }, [focus, flyCamera]);
 
   return (
     <div className="map-app">

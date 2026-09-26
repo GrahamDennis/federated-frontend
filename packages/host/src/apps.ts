@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import type {SettingsSchema} from '@ff/protocol';
+import type {PortDescriptor, SettingsSchema} from '@ff/protocol';
 
 /**
  * An app the chrome can host. `plugin` apps integrate with the chrome over the
@@ -23,6 +23,9 @@ export interface AppDescriptor {
   detail?: boolean;
   /** Per-instance settings the app accepts (authored in layout edit mode). */
   settings?: SettingsSchema;
+  /** Typed ports: what the app consumes / publishes (wired in layout edit mode). */
+  inputs?: Record<string, PortDescriptor>;
+  outputs?: Record<string, PortDescriptor>;
 }
 
 /** The discovery API's view of a plugin (the fields the chrome consumes). */
@@ -35,6 +38,8 @@ interface DiscoveredPlugin {
   detailApps?: string[];
   detail?: boolean;
   settings?: SettingsSchema;
+  inputs?: Record<string, PortDescriptor>;
+  outputs?: Record<string, PortDescriptor>;
 }
 
 const REGISTRY_URL =
@@ -58,5 +63,7 @@ export async function fetchApps(): Promise<AppDescriptor[]> {
     detailApps: p.detailApps,
     detail: p.detail,
     settings: p.settings,
+    inputs: p.inputs,
+    outputs: p.outputs,
   }));
 }

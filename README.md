@@ -41,6 +41,9 @@ packages/
                     (⌘K fly-to commands + toasts) — no remote-dom contributions.
   plugin-places/    :5176  A subordinate "detail" companion that reflects/annotates
                     the place selected in the shared workspace context.
+  plugin-histogram/ :5177  A "selection view" block for layouts: a brushable
+                    population histogram of sample cities, filtered by a wired
+                    viewport, publishing the picked city and brushed range.
   plugin-registry/  :5180  Plugin distribution + discovery. Packages plugins as
                     ORAS-style OCI artifacts and serves them: a dumb
                     content-addressed endpoint (/content/<repo>@<digest>/) plus a
@@ -194,6 +197,12 @@ a detail map that follows the selection. Plugins declare settings in
 `ff-plugin.json#settings`, edit mode renders a form for them (⚙), and plugins
 receive the values live (`useHostSettings` in `@ff/plugin-sdk-react/settings`).
 
+Blocks can also be **wired**. A plugin declares typed `inputs` and `outputs`,
+a view binds one block's output to another's input, and the host routes the
+values between the isolated iframes. In the "Explorer (wired)" view, the map's
+visible area filters the histogram, and picking a city in the histogram drives
+the detail map and Places. Wiring is edited in the block panel (⚙).
+
 Apps stay kept-alive and are placed by `grid-area` only, so moving, swapping, or
 enlarging never reloads an iframe. The ⌘K palette and shared context span every
 visible slot. Deep link: `/?mode=layout&view=quad`. The design, and how it
@@ -238,7 +247,7 @@ ages out by TTL / LRU size cap.
 
 ```bash
 npm install
-npm run dev       # host (:5173), plugin registry (:5180), and the 3 plugins (:5174–:5176)
+npm run dev       # host (:5173), plugin registry (:5180), and the 4 plugins (:5174–:5177)
 # open http://localhost:5173
 npm run typecheck
 npm test          # Playwright e2e (boots all the dev servers automatically)
@@ -291,6 +300,11 @@ exercising the cross-origin channels rather than mocking them:
   cohering through the shared selection; palette commands labelled per
   instance; adding another instance from a slot's picker; editing block
   settings live in edit mode (saved with the view, discarded on Cancel).
+- `tests/wiring.spec.ts` — resolving and rebinding inputs (pure); in the
+  wired Explorer view: the map viewport filtering the histogram, a picked city
+  driving the detail map and Places, brushing, wired inputs taking precedence
+  over the shared selection, and rewiring in edit mode (only type-compatible
+  outputs offered); deleting blocks (refused while another view uses them).
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.
