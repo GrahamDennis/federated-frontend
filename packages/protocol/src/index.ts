@@ -9,6 +9,7 @@ export const HOST_ORIGIN = 'http://localhost:5173';
 export const PLUGIN_ORIGIN = 'http://localhost:5174';
 export const MAP_PLUGIN_ORIGIN = 'http://localhost:5175';
 export const PLACES_PLUGIN_ORIGIN = 'http://localhost:5176';
+export const HISTOGRAM_PLUGIN_ORIGIN = 'http://localhost:5177';
 
 export type ToastTone = 'info' | 'success' | 'critical';
 
@@ -97,7 +98,63 @@ export interface HostApi {
   subscribeSettings(
     listener: (settings: BlockSettings) => void,
   ): Promise<() => void>;
+
+  /**
+   * Publish a value on one of this instance's declared outputs
+   * (`ff-plugin.json#outputs`). The host routes it to whichever block inputs the
+   * layout author wired to it; the plugin never learns who's listening.
+   */
+  publish(output: string, value: PortValue | null): Promise<void>;
+  /**
+   * This instance's **wired** inputs. Only inputs the layout connects appear as
+   * keys (with `null` until the source publishes), so a plugin can tell "not
+   * connected" (fall back to its own behaviour) from "connected, no value yet".
+   */
+  getInputs(): Promise<BlockInputs>;
+  /** Subscribe to this instance's inputs changing (values or wiring). */
+  subscribeInputs(listener: (inputs: BlockInputs) => void): Promise<() => void>;
 }
+
+/**
+ * A typed input or output a block declares in its manifest. `type` names a
+ * value shape; the host only lets the author wire an output to an input of the
+ * same type. The shapes below are the ones these example plugins agree on —
+ * like {@link SharedContext}, the host itself treats values opaquely.
+ */
+export interface PortDescriptor {
+  type: PortType;
+  label: string;
+  description?: string;
+}
+
+export type PortType = 'place' | 'bbox' | 'range' | (string & {});
+
+/** Port values are plain JSON so they cross the iframe boundary as data. */
+export type PortValue = SelectedPlace | BBox | NumberRange | JsonValue;
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | {[key: string]: JsonValue};
+
+/** `bbox`: a geographic bounding box in degrees. */
+export interface BBox {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+}
+
+/** `range`: an inclusive numeric interval. */
+export interface NumberRange {
+  min: number;
+  max: number;
+}
+
+/** Wired inputs by name; `null` = connected but nothing published yet. */
+export type BlockInputs = Record<string, PortValue | null>;
 
 /** Identifies one running instance ("block") of a plugin. */
 export interface InstanceInfo {

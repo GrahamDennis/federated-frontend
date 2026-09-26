@@ -8,9 +8,11 @@ import {
   useState,
 } from 'preact/hooks';
 import type {
+  BlockInputs,
   BlockSettings,
   CommandDescriptor,
   InstanceInfo,
+  PortValue,
   ForwardedKeyEvent,
   SharedContext,
   ToastOptions,
@@ -19,7 +21,8 @@ import type {
 import type {AppDescriptor} from './apps';
 import {AppView} from './AppView';
 import {readWorkspaceFromUrl, writeWorkspaceToUrl} from './workspaceUrl';
-import {gridArea, type Rect} from './layout';
+import {gridArea, resolveInputs, type Rect} from './layout';
+import {useInstanceFeed} from './instanceFeed';
 import {LayoutBar, SlotLayer, gridTemplate} from './LayoutStage';
 import {useLayouts} from './useLayouts';
 import {instanceFor, type Instance} from './instances';
@@ -39,6 +42,13 @@ interface ChromeContextValue {
   subscribeInstanceSettings(
     instanceId: string,
     listener: (settings: BlockSettings) => void,
+  ): () => void;
+  /** Wiring between blocks: outputs a plugin publishes, inputs it's fed. */
+  publishOutput(instanceId: string, output: string, value: PortValue | null): void;
+  getInstanceInputs(instanceId: string): BlockInputs;
+  subscribeInstanceInputs(
+    instanceId: string,
+    listener: (inputs: BlockInputs) => void,
   ): () => void;
   /** All registered apps (so a plugin can be offered its siblings). */
   apps: AppDescriptor[];
@@ -171,6 +181,9 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   const subscribeSharedContext = useCallback(
     (listener: (context: SharedContext) => void) => {
       contextSubscribers.current.add(listener);
+      // Plugins read, then subscribe, in two thread round trips; replay the
+      // current context so a change landing in between isn't lost.
+      listener(sharedContextRef.current);
       return () => {
         contextSubscribers.current.delete(listener);
       };
@@ -227,20 +240,11 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // the latest render and are pushed changes (e.g. live while authoring).
   const instancesRef = useRef(new Map<string, Instance>());
   instancesRef.current = new Map(mounted.map((i) => [i.id, i]));
-  const settingsSubscribers = useRef(
-    new Map<string, Set<(settings: BlockSettings) => void>>(),
+  const mountedIds = mounted.map((i) => i.id);
+  const settingsFeed = useInstanceFeed<BlockSettings>(
+    mountedIds,
+    (id) => instancesRef.current.get(id)?.settings ?? {},
   );
-  const lastSettings = useRef(new Map<string, string>());
-  useEffect(() => {
-    for (const instance of mounted) {
-      const json = JSON.stringify(instance.settings);
-      if (lastSettings.current.get(instance.id) === json) continue;
-      lastSettings.current.set(instance.id, json);
-      for (const listener of settingsSubscribers.current.get(instance.id) ?? []) {
-        listener(instance.settings);
-      }
-    }
-  });
   const getInstanceInfo = useCallback((instanceId: string): InstanceInfo => {
     const instance = instancesRef.current.get(instanceId);
     return {
@@ -249,20 +253,26 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       label: instance?.label ?? instanceId,
     };
   }, []);
-  const getInstanceSettings = useCallback(
-    (instanceId: string) => instancesRef.current.get(instanceId)?.settings ?? {},
-    [],
-  );
-  const subscribeInstanceSettings = useCallback(
-    (instanceId: string, listener: (settings: BlockSettings) => void) => {
-      const listeners = settingsSubscribers.current.get(instanceId) ?? new Set();
-      listeners.add(listener);
-      settingsSubscribers.current.set(instanceId, listeners);
-      return () => {
-        listeners.delete(listener);
-      };
+
+  // Wiring broker. Each instance's latest published outputs are kept here; an
+  // instance's inputs are resolved from the active view's bindings (only in
+  // layout mode — apps mode has no wiring) and pushed when they change.
+  // Publishing bumps `outputsVersion` to re-render, which runs the feed's diff.
+  const outputsRef = useRef(new Map<string, Record<string, PortValue | null>>());
+  const [, setOutputsVersion] = useState(0);
+  const publishOutput = useCallback(
+    (instanceId: string, output: string, value: PortValue | null) => {
+      const current = outputsRef.current.get(instanceId) ?? {};
+      outputsRef.current.set(instanceId, {...current, [output]: value});
+      setOutputsVersion((version) => version + 1);
     },
     [],
+  );
+  const wiringView = layoutMode ? layouts.view : null;
+  const inputsFeed = useInstanceFeed<BlockInputs>(mountedIds, (id) =>
+    wiringView
+      ? resolveInputs(wiringView, id, (blockId, output) => outputsRef.current.get(blockId)?.[output])
+      : {},
   );
 
   // The palette spans the apps currently in the foreground — the primary app and
@@ -336,8 +346,11 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       toast,
       setCommandsForInstance,
       getInstanceInfo,
-      getInstanceSettings,
-      subscribeInstanceSettings,
+      getInstanceSettings: settingsFeed.get,
+      subscribeInstanceSettings: settingsFeed.subscribe,
+      publishOutput,
+      getInstanceInputs: inputsFeed.get,
+      subscribeInstanceInputs: inputsFeed.subscribe,
       apps,
       activateApp,
       getSharedContext,
@@ -351,8 +364,11 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
       toast,
       setCommandsForInstance,
       getInstanceInfo,
-      getInstanceSettings,
-      subscribeInstanceSettings,
+      settingsFeed.get,
+      settingsFeed.subscribe,
+      publishOutput,
+      inputsFeed.get,
+      inputsFeed.subscribe,
       apps,
       activateApp,
       getSharedContext,

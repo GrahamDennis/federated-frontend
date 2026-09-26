@@ -10,6 +10,8 @@ import {
   newBlockId,
   rectOf,
   resolveSlots,
+  setBinding,
+  type Binding,
   type Block,
   type BlockRegistry,
   type Direction,
@@ -23,9 +25,31 @@ const LEGACY_STORAGE_KEY = 'ff.layout-views.v1';
 interface Stored {
   views: LayoutView[];
   blocks: BlockRegistry;
+  /**
+   * Default view ids already offered to this user. Defaults shipped later are
+   * added on load, but ones the user has since deleted don't come back.
+   */
+  seenDefaults?: string[];
 }
 
-const DEFAULTS: Stored = {views: DEFAULT_VIEWS, blocks: DEFAULT_BLOCKS};
+const DEFAULTS: Stored = {
+  views: DEFAULT_VIEWS,
+  blocks: DEFAULT_BLOCKS,
+  seenDefaults: DEFAULT_VIEWS.map((v) => v.id),
+};
+
+/** Add default views/blocks shipped since the user's layouts were saved. */
+function withNewDefaults(stored: Stored): Stored {
+  const seen = new Set(stored.seenDefaults ?? stored.views.map((v) => v.id));
+  const added = DEFAULT_VIEWS.filter(
+    (d) => !seen.has(d.id) && !stored.views.some((v) => v.id === d.id),
+  );
+  return {
+    views: [...stored.views, ...added],
+    blocks: {...DEFAULT_BLOCKS, ...stored.blocks},
+    seenDefaults: DEFAULT_VIEWS.map((v) => v.id),
+  };
+}
 
 /**
  * Saved views and blocks are the admin-authored definitions. In a real
@@ -38,7 +62,7 @@ function load(): Stored {
     if (raw) {
       const parsed = JSON.parse(raw) as Stored;
       if (Array.isArray(parsed.views) && parsed.views.length > 0) {
-        return {views: parsed.views, blocks: parsed.blocks ?? {}};
+        return withNewDefaults({...parsed, blocks: parsed.blocks ?? {}});
       }
     }
     // v1 stored only views, with slots naming an app. The default block of an
@@ -49,8 +73,7 @@ function load(): Stored {
         ...view,
         slots: view.slots.map(({appId, ...slot}: any) => ({...slot, blockId: appId ?? null})),
       }));
-      const missing = DEFAULT_VIEWS.filter((d) => !views.some((v) => v.id === d.id));
-      return {views: [...views, ...missing], blocks: DEFAULT_BLOCKS};
+      return withNewDefaults({views, blocks: {}, seenDefaults: []});
     }
   } catch {
     // Storage unavailable or corrupt: fall back to the defaults.
@@ -86,6 +109,13 @@ interface Draft {
  *   copy that is never saved; "Reset" drops it back to the saved definition.
  *   Enlargement is even more transient: it's cleared whenever the view changes.
  */
+function useDraftViewUpdater(setDraft: (fn: (d: Draft | null) => Draft | null) => void) {
+  return useCallback(
+    (fn: (v: LayoutView) => LayoutView) => setDraft((d) => d && {...d, view: fn(d.view)}),
+    [setDraft],
+  );
+}
+
 export function useLayouts(initialViewId: string | null) {
   const [saved, setSaved] = useState<Stored>(load);
   const {views} = saved;
@@ -95,6 +125,7 @@ export function useLayouts(initialViewId: string | null) {
   const [liveByView, setLiveByView] = useState<Record<string, LayoutView>>({});
   const [enlargement, setEnlargement] = useState<Enlargement | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const updateDraftView = useDraftViewUpdater(setDraft);
 
   useEffect(() => store(saved), [saved]);
 
@@ -178,6 +209,49 @@ export function useLayouts(initialViewId: string | null) {
     [],
   );
 
+  /** Wire (or unwire) one block input in the draft view (edit mode only). */
+  const setInputBinding = useCallback(
+    (blockId: string, input: string, from: Binding['from'] | null) =>
+      updateDraftView((v) => setBinding(v, blockId, input, from)),
+    [],
+  );
+
+  /** Saved views (other than the one being edited) that show `blockId`. */
+  const viewsUsingBlock = useCallback(
+    (blockId: string) =>
+      views
+        .filter((v) => v.id !== draft?.view.id)
+        .filter((v) => v.slots.some((s) => s.blockId === blockId))
+        .map((v) => v.name),
+    [views, draft?.view.id],
+  );
+
+  /**
+   * Delete an explicit block from the draft registry, emptying its slots and
+   * dropping its wiring in the draft view. Refused while other views use it.
+   */
+  const deleteBlock = useCallback(
+    (blockId: string) => {
+      if (viewsUsingBlock(blockId).length > 0) return;
+      setDraft((d) => {
+        if (!d) return d;
+        const {[blockId]: _deleted, ...blocks} = d.blocks;
+        return {
+          ...d,
+          blocks,
+          view: {
+            ...d.view,
+            slots: d.view.slots.map((s) => (s.blockId === blockId ? {...s, blockId: null} : s)),
+            bindings: (d.view.bindings ?? []).filter(
+              (b) => b.blockId !== blockId && b.from.blockId !== blockId,
+            ),
+          },
+        };
+      });
+    },
+    [viewsUsingBlock],
+  );
+
   const resetView = useCallback(() => {
     setLiveByView(({[savedView.id]: _dropped, ...rest}) => rest);
     setEnlargement(null);
@@ -221,10 +295,6 @@ export function useLayouts(initialViewId: string | null) {
     }));
   }, [saved.blocks]);
 
-  const updateDraft = useCallback(
-    (fn: (v: LayoutView) => LayoutView) => setDraft((d) => d && {...d, view: fn(d.view)}),
-    [],
-  );
 
   const cancelEditing = useCallback(() => setDraft(null), []);
 
@@ -232,6 +302,7 @@ export function useLayouts(initialViewId: string | null) {
     if (!draft) return;
     const {view: next, blocks: nextBlocks} = draft;
     setSaved((s) => ({
+      ...s,
       blocks: nextBlocks,
       views: s.views.some((v) => v.id === next.id)
         ? s.views.map((v) => (v.id === next.id ? next : v))
@@ -280,7 +351,10 @@ export function useLayouts(initialViewId: string | null) {
     restoreSlot,
     startEditing,
     newDraft,
-    updateDraft,
+    updateDraft: updateDraftView,
+    setInputBinding,
+    viewsUsingBlock,
+    deleteBlock,
     cancelEditing,
     saveDraft,
     deleteView,

@@ -1,10 +1,11 @@
 import {useRef, useState} from 'preact/hooks';
-import type {SettingDescriptor, SettingValue} from '@ff/protocol';
+import type {PortDescriptor, SettingDescriptor, SettingValue} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
 import {instanceFor, knownInstances, type Instance} from './instances';
 import {
   MAX_GRID,
   addSlot,
+  bindingFor,
   canPlace,
   emptyCells,
   gridArea,
@@ -261,7 +262,7 @@ export function SlotLayer({
                 ⠿
               </span>
               {picker(r.slot.id, r.slot.blockId, `Block for slot ${r.slot.id}`)}
-              {instance(r.slot.blockId)?.app.settings && (
+              {hasPanel(instance(r.slot.blockId)) && (
                 <button
                   className="slot-icon"
                   aria-label={`Settings for slot ${r.slot.id}`}
@@ -290,6 +291,14 @@ export function SlotLayer({
               {r.slot.blockId && (
                 <span className="slot-edit-id">{r.slot.blockId}</span>
               )}
+              {(view.bindings ?? [])
+                .filter((b) => b.blockId === r.slot.blockId)
+                .map((b) => (
+                  <span key={b.input} className="slot-edit-wire">
+                    ⇠ {b.input} ← {instance(b.from.blockId)?.label ?? b.from.blockId}.
+                    {b.from.output}
+                  </span>
+                ))}
             </div>
             <div
               className="slot-resize"
@@ -315,6 +324,7 @@ export function SlotLayer({
       {settingsFor && (
         <BlockSettingsPanel
           instance={settingsFor}
+          apps={apps}
           layouts={layouts}
           onClose={() => setSettingsBlockId(null)}
         />
@@ -481,17 +491,34 @@ function BlockPicker({
  * declared in its manifest. Changes apply live (the plugin is notified over its
  * thread) and are committed with the view on Save.
  */
+/** Whether a block has anything to author in the block panel. */
+function hasPanel(instance: Instance | null): boolean {
+  if (!instance) return false;
+  const {app} = instance;
+  return Boolean(app.settings || app.inputs || app.outputs || instance.id !== app.id);
+}
+
 function BlockSettingsPanel({
   instance,
+  apps,
   layouts,
   onClose,
 }: {
   instance: Instance;
+  apps: AppDescriptor[];
   layouts: Layouts;
   onClose(): void;
 }) {
   const set = (key: string, value: SettingValue) =>
     layouts.updateBlock(instance.block, {settings: {[key]: value}});
+  const explicit = instance.id !== instance.app.id && instance.id in layouts.blocks;
+  const usedIn = explicit ? layouts.viewsUsingBlock(instance.id) : [];
+  // Other blocks placed in this view, as candidate sources for inputs.
+  const sources = layouts.view.slots
+    .map((slot) => slot.blockId)
+    .filter((id): id is string => Boolean(id) && id !== instance.id)
+    .map((id) => instanceFor(layouts.blocks, id, apps))
+    .filter((i): i is Instance => i !== null);
   return (
     <aside className="block-settings" aria-label="Block settings">
       <header>
@@ -519,7 +546,104 @@ function BlockSettingsPanel({
           onChange={(value) => set(key, value)}
         />
       ))}
+      {instance.app.inputs && (
+        <section className="block-section">
+          <h4>Inputs</h4>
+          {Object.entries(instance.app.inputs).map(([input, port]) => (
+            <InputField
+              key={input}
+              layouts={layouts}
+              blockId={instance.id}
+              input={input}
+              port={port}
+              sources={sources}
+            />
+          ))}
+        </section>
+      )}
+      {instance.app.outputs && (
+        <section className="block-section">
+          <h4>Outputs</h4>
+          <ul className="block-outputs">
+            {Object.entries(instance.app.outputs).map(([output, port]) => (
+              <li key={output}>
+                {port.label} <code>{output}: {port.type}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {explicit && (
+        <button
+          className="btn btn-critical"
+          disabled={usedIn.length > 0}
+          title={usedIn.length > 0 ? `Also used in: ${usedIn.join(', ')}` : undefined}
+          onClick={() => layouts.deleteBlock(instance.id)}
+        >
+          Delete block
+        </button>
+      )}
+      {usedIn.length > 0 && (
+        <small className="block-settings-meta">Also used in: {usedIn.join(', ')}</small>
+      )}
     </aside>
+  );
+}
+
+const SEP = '\u0000';
+
+/**
+ * Connect one input to a type-compatible output of another block in the view.
+ * The value encodes `blockId␀output`.
+ */
+function InputField({
+  layouts,
+  blockId,
+  input,
+  port,
+  sources,
+}: {
+  layouts: Layouts;
+  blockId: string;
+  input: string;
+  port: PortDescriptor;
+  sources: Instance[];
+}) {
+  const bound = bindingFor(layouts.view, blockId, input);
+  const options = sources.flatMap((source) =>
+    Object.entries(source.app.outputs ?? {})
+      .filter(([, out]) => out.type === port.type)
+      .map(([output, out]) => ({
+        value: `${source.id}${SEP}${output}`,
+        label: `${source.label} · ${out.label}`,
+      })),
+  );
+  return (
+    <label className="block-field">
+      <span>
+        {port.label} <code>{port.type}</code>
+      </span>
+      <select
+        aria-label={`Input ${port.label}`}
+        value={bound ? `${bound.from.blockId}${SEP}${bound.from.output}` : ''}
+        onChange={(e) => {
+          const [fromBlock, output] = e.currentTarget.value.split(SEP);
+          layouts.setInputBinding(
+            blockId,
+            input,
+            fromBlock ? {blockId: fromBlock, output} : null,
+          );
+        }}
+      >
+        <option value="">— Not connected —</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {port.description && <small>{port.description}</small>}
+    </label>
   );
 }
 

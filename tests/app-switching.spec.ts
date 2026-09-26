@@ -18,6 +18,7 @@ test.describe('app switching', () => {
     await expect(page.locator('.app-rail-item .app-rail-name')).toHaveText([
       'Example Notes',
       'World Map',
+      'City histogram',
       'Google',
     ]);
   });

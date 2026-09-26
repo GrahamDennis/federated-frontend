@@ -4,21 +4,45 @@
   "version": "0.0.0",
   "kind": "plugin",
   "entry": "index.html",
-  "description": "A MapLibre GL map (an integrated plugin). It uses only the capability API: it registers ⌘K fly-to commands and raises toasts, with no remote-dom contributions.",
-  "detailApps": ["places"],
+  "description": "A MapLibre GL map (an integrated plugin). It registers ⌘K fly-to commands, raises toasts, publishes its selection and viewport, and can be driven by a wired focus input.",
+  "detailApps": [
+    "places"
+  ],
   "settings": {
-    "title": {"type": "string", "label": "Title", "default": "World Map"},
+    "title": {
+      "type": "string",
+      "label": "Title",
+      "default": "World Map"
+    },
     "home": {
       "type": "select",
       "label": "Start at",
       "default": "world",
       "options": [
-        {"value": "world", "label": "Whole world"},
-        {"value": "tokyo", "label": "Tokyo"},
-        {"value": "newyork", "label": "New York"},
-        {"value": "london", "label": "London"},
-        {"value": "sydney", "label": "Sydney"},
-        {"value": "cairo", "label": "Cairo"}
+        {
+          "value": "world",
+          "label": "Whole world"
+        },
+        {
+          "value": "tokyo",
+          "label": "Tokyo"
+        },
+        {
+          "value": "newyork",
+          "label": "New York"
+        },
+        {
+          "value": "london",
+          "label": "London"
+        },
+        {
+          "value": "sydney",
+          "label": "Sydney"
+        },
+        {
+          "value": "cairo",
+          "label": "Cairo"
+        }
       ]
     },
     "followSelection": {
@@ -27,7 +51,35 @@
       "description": "Fly to places selected elsewhere in the workspace.",
       "default": true
     },
-    "showCities": {"type": "boolean", "label": "Show city buttons", "default": true},
-    "flyZoom": {"type": "number", "label": "Zoom when flying to a city", "default": 9, "min": 1, "max": 16, "step": 1}
+    "showCities": {
+      "type": "boolean",
+      "label": "Show city buttons",
+      "default": true
+    },
+    "flyZoom": {
+      "type": "number",
+      "label": "Zoom when flying to a city",
+      "default": 9,
+      "min": 1,
+      "max": 16,
+      "step": 1
+    }
+  },
+  "inputs": {
+    "focus": {
+      "type": "place",
+      "label": "Focus on place",
+      "description": "When connected, the map flies to this place (instead of following the shared selection)."
+    }
+  },
+  "outputs": {
+    "selection": {
+      "type": "place",
+      "label": "Selected city"
+    },
+    "viewport": {
+      "type": "bbox",
+      "label": "Visible area"
+    }
   }
 }

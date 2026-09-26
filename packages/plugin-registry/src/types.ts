@@ -30,6 +30,9 @@ export interface PluginManifest {
    * renders an authoring form for it.
    */
   settings?: Record<string, unknown>;
+  /** Typed inputs/outputs for wiring blocks together (opaque, passed through). */
+  inputs?: Record<string, unknown>;
+  outputs?: Record<string, unknown>;
 }
 
 /**

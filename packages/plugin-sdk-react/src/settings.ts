@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import type {BlockSettings, InstanceInfo} from '@ff/protocol';
+import type {BlockInputs, BlockSettings, InstanceInfo} from '@ff/protocol';
 import type {Host} from './connect';
 
 /**
@@ -51,4 +51,35 @@ export function useInstanceInfo(host: Host | undefined): InstanceInfo | null {
     };
   }, [host]);
   return info;
+}
+
+/**
+ * This instance's wired inputs, kept live. Only inputs the layout connects are
+ * present as keys (`null` until the source publishes); standalone, or when
+ * nothing is wired, it's `{}` — so check `'name' in inputs` to decide whether to
+ * follow the input or fall back to the plugin's own behaviour.
+ */
+export function useHostInputs(host: Host | undefined): BlockInputs {
+  const [inputs, setInputs] = useState<BlockInputs>({});
+
+  useEffect(() => {
+    if (!host) return;
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+    const apply = (next: BlockInputs) => {
+      if (!cancelled) setInputs(next);
+    };
+    void (async () => {
+      apply(await host.getInputs());
+      const off = await host.subscribeInputs(apply);
+      if (cancelled) off();
+      else unsubscribe = off;
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [host]);
+
+  return inputs;
 }

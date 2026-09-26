@@ -22,6 +22,9 @@ plugins:
   places:
     source: {type: oci, ref: localhost:5001/ff-plugins/places:dev}
 
+  histogram:
+    source: {type: oci, ref: localhost:5001/ff-plugins/histogram:dev}
+
   google:
     source: {type: external, url: 'https://www.google.com/webhp?igu=1'}
     metadata:
