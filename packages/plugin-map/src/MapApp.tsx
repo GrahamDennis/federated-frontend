@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import maplibregl from 'maplibre-gl';
 import type {Host} from '@ff/plugin-sdk-react/connect';
+import {useHostSettings} from '@ff/plugin-sdk-react/settings';
 import type {SelectedPlace} from '@ff/protocol';
 
 interface Place {
@@ -18,6 +19,22 @@ const PLACES: Place[] = [
   {id: 'cairo', name: 'Cairo', center: [31.24, 30.04], zoom: 9},
 ];
 
+/** Mirrors the defaults declared in `public/ff-plugin.json#settings`. */
+const DEFAULT_SETTINGS = {
+  title: 'World Map',
+  home: 'world',
+  followSelection: true,
+  showCities: true,
+  flyZoom: 9,
+};
+
+const WORLD_VIEW = {center: [10, 30] as [number, number], zoom: 1.4};
+
+function homeView(home: string) {
+  const place = PLACES.find((p) => p.id === home);
+  return place ? {center: place.center, zoom: place.zoom} : WORLD_VIEW;
+}
+
 /**
  * A MapLibre map. Its core (the map + city controls) works anywhere. When it's
  * hosted, it *enhances*: it registers ⌘K commands to fly to cities and raises a
@@ -32,6 +49,11 @@ export function MapApp({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [status, setStatus] = useState('Drag to explore, or jump to a city.');
+  // Per-instance settings (the host can run several maps, each configured
+  // differently — e.g. an overview that ignores the selection + a detail map).
+  const settings = useHostSettings(host, DEFAULT_SETTINGS);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -41,8 +63,7 @@ export function MapApp({
         container: containerRef.current,
         // MapLibre's free demo style — vector tiles, no API key required.
         style: 'https://demotiles.maplibre.org/style.json',
-        center: [10, 30],
-        zoom: 1.4,
+        ...homeView(settingsRef.current.home),
         attributionControl: {compact: true},
       });
       mapRef.current = map;
@@ -57,6 +78,12 @@ export function MapApp({
     };
   }, []);
 
+  // Jump to the configured starting view whenever it changes.
+  useEffect(() => {
+    lastFlownId.current = null;
+    mapRef.current?.jumpTo(homeView(settings.home));
+  }, [settings.home]);
+
   // Move the camera only (used both for local clicks and when the shared
   // selection changes elsewhere). Guarded by id so context echoes don't reanimate.
   const lastFlownId = useRef<string | null>(null);
@@ -65,7 +92,7 @@ export function MapApp({
     lastFlownId.current = place.id;
     mapRef.current?.flyTo({
       center: place.center,
-      zoom: place.zoom,
+      zoom: settingsRef.current.flyZoom,
       essential: true,
     });
     setStatus(`Flying to ${place.name}`);
@@ -114,7 +141,7 @@ export function MapApp({
     let unsubscribe: (() => void) | undefined;
     void (async () => {
       const apply = (selected: SelectedPlace | null | undefined) => {
-        if (!selected) return;
+        if (!selected || !settingsRef.current.followSelection) return;
         flyCamera({
           id: selected.id,
           name: selected.name,
@@ -141,18 +168,20 @@ export function MapApp({
       <div ref={containerRef} className="map-canvas" />
       <div className="map-panel">
         <div className="map-title">
-          🗺️ World Map
+          🗺️ {settings.title}
           <span className={`map-badge ${host ? 'hosted' : ''}`}>
             {host ? 'hosted' : 'standalone'}
           </span>
         </div>
-        <div className="map-buttons">
-          {PLACES.map((place) => (
-            <button key={place.id} onClick={() => selectPlace(place)}>
-              {place.name}
-            </button>
-          ))}
-        </div>
+        {settings.showCities && (
+          <div className="map-buttons">
+            {PLACES.map((place) => (
+              <button key={place.id} onClick={() => selectPlace(place)}>
+                {place.name}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="map-status">{status}</div>
         {!host && (
           <div className="map-note">

@@ -762,3 +762,77 @@ code {
   border-color: var(--critical);
   background: rgba(240, 80, 110, 0.12);
 }
+
+.slot-edit-body {
+  flex-direction: column;
+  gap: 4px;
+}
+.slot-edit-id {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--subdued);
+}
+
+/* Authoring form for one block's name + declared settings. */
+.block-settings {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 6;
+  width: 300px;
+  max-height: 100%;
+  overflow: auto;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+.block-settings header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.block-settings-meta {
+  margin: -6px 0 0;
+  color: var(--subdued);
+}
+.block-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.block-field > span {
+  color: var(--subdued);
+}
+.block-field input:not([type='checkbox']),
+.block-field select {
+  font: inherit;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+.block-field-inline {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 8px;
+}
+.block-field-inline > span {
+  color: var(--text);
+}
+.block-field-inline small {
+  grid-column: 2;
+}
+.block-field small {
+  color: var(--subdued);
+  font-size: 11px;
+}

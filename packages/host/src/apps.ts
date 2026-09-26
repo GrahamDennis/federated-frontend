@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import type {SettingsSchema} from '@ff/protocol';
 
 /**
  * An app the chrome can host. `plugin` apps integrate with the chrome over the
@@ -20,6 +21,8 @@ export interface AppDescriptor {
   detailApps?: string[];
   /** Marks an app as a detail-only companion: hidden from the main rail. */
   detail?: boolean;
+  /** Per-instance settings the app accepts (authored in layout edit mode). */
+  settings?: SettingsSchema;
 }
 
 /** The discovery API's view of a plugin (the fields the chrome consumes). */
@@ -31,6 +34,7 @@ interface DiscoveredPlugin {
   description?: string;
   detailApps?: string[];
   detail?: boolean;
+  settings?: SettingsSchema;
 }
 
 const REGISTRY_URL =
@@ -53,5 +57,6 @@ export async function fetchApps(): Promise<AppDescriptor[]> {
     description: p.description,
     detailApps: p.detailApps,
     detail: p.detail,
+    settings: p.settings,
   }));
 }

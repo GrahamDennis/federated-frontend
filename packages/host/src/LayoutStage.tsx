@@ -1,5 +1,7 @@
 import {useRef, useState} from 'preact/hooks';
+import type {SettingDescriptor, SettingValue} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
+import {instanceFor, knownInstances, type Instance} from './instances';
 import {
   MAX_GRID,
   addSlot,
@@ -160,6 +162,18 @@ export function SlotLayer({
   const ref = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [menuSlotId, setMenuSlotId] = useState<string | null>(null);
+  const [settingsBlockId, setSettingsBlockId] = useState<string | null>(null);
+  const instance = (id: string | null) => (id ? instanceFor(layouts.blocks, id, apps) : null);
+  const picker = (slotId: string, value: string | null, label: string) => (
+    <BlockPicker
+      layouts={layouts}
+      apps={apps}
+      slotId={slotId}
+      value={value}
+      label={label}
+    />
+  );
+  const settingsFor = editing && settingsBlockId ? instance(settingsBlockId) : null;
 
   function cellAt(event: PointerEvent): {col: number; row: number} {
     const box = ref.current!.getBoundingClientRect();
@@ -209,8 +223,6 @@ export function SlotLayer({
     setDrag(null);
   }
 
-  const appName = (id: string | null) =>
-    apps.find((app) => app.id === id)?.name ?? 'Empty';
 
   return (
     <div
@@ -248,12 +260,18 @@ export function SlotLayer({
               <span className="slot-grip" aria-hidden>
                 ⠿
               </span>
-              <AppPicker
-                apps={apps}
-                value={r.slot.appId}
-                label={`Default app for slot ${r.slot.id}`}
-                onChange={(appId) => layouts.setSlotApp(r.slot.id, appId)}
-              />
+              {picker(r.slot.id, r.slot.blockId, `Block for slot ${r.slot.id}`)}
+              {instance(r.slot.blockId)?.app.settings && (
+                <button
+                  className="slot-icon"
+                  aria-label={`Settings for slot ${r.slot.id}`}
+                  title="Block settings"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => setSettingsBlockId(r.slot.blockId)}
+                >
+                  ⚙
+                </button>
+              )}
               <span className="slot-size">
                 {r.slot.colSpan}×{r.slot.rowSpan}
               </span>
@@ -267,7 +285,12 @@ export function SlotLayer({
                 ✕
               </button>
             </div>
-            <div className="slot-edit-body">{appName(r.slot.appId)}</div>
+            <div className="slot-edit-body">
+              {instance(r.slot.blockId)?.label ?? 'Empty'}
+              {r.slot.blockId && (
+                <span className="slot-edit-id">{r.slot.blockId}</span>
+              )}
+            </div>
             <div
               className="slot-resize"
               aria-label={`Resize slot ${r.slot.id}`}
@@ -282,11 +305,19 @@ export function SlotLayer({
             key={r.slot.id}
             resolved={r}
             layouts={layouts}
-            apps={apps}
+            picker={picker(r.slot.id, r.slot.blockId, `Block in slot ${r.slot.id}`)}
             menuOpen={menuSlotId === r.slot.id}
             setMenuOpen={(open) => setMenuSlotId(open ? r.slot.id : null)}
           />
         ),
+      )}
+
+      {settingsFor && (
+        <BlockSettingsPanel
+          instance={settingsFor}
+          layouts={layouts}
+          onClose={() => setSettingsBlockId(null)}
+        />
       )}
 
       {drag && (
@@ -302,13 +333,13 @@ export function SlotLayer({
 function SlotFrame({
   resolved: r,
   layouts,
-  apps,
+  picker,
   menuOpen,
   setMenuOpen,
 }: {
   resolved: ResolvedSlot;
   layouts: Layouts;
-  apps: AppDescriptor[];
+  picker: preact.ComponentChild;
   menuOpen: boolean;
   setMenuOpen(open: boolean): void;
 }) {
@@ -334,12 +365,7 @@ function SlotFrame({
           if (e.target === e.currentTarget) layouts.toggleMaximize(r.slot.id);
         }}
       >
-        <AppPicker
-          apps={apps}
-          value={r.slot.appId}
-          label={`App in slot ${r.slot.id}`}
-          onChange={(appId) => layouts.setSlotApp(r.slot.id, appId)}
-        />
+        {picker}
         <span className="slot-header-spacer" />
         {r.enlarged && (
           <button
@@ -385,41 +411,176 @@ function SlotFrame({
           </div>
         )}
       </div>
-      {r.slot.appId === null && (
+      {r.slot.blockId === null && (
         <div className="slot-empty">
           <p>Empty slot</p>
-          <p className="slot-empty-hint">Pick an app from the menu above.</p>
+          <p className="slot-empty-hint">Pick a block from the menu above.</p>
         </div>
       )}
     </div>
   );
 }
 
-function AppPicker({
+const NEW_PREFIX = 'new:';
+
+/**
+ * Chooses which block a slot shows: any existing block (picking one shown in
+ * another slot swaps them), or a brand-new instance of any app.
+ */
+function BlockPicker({
+  layouts,
   apps,
+  slotId,
   value,
   label,
-  onChange,
 }: {
+  layouts: Layouts;
   apps: AppDescriptor[];
+  slotId: string;
   value: string | null;
   label: string;
-  onChange(appId: string | null): void;
 }) {
+  const instances = knownInstances(layouts.blocks, apps);
   return (
     <select
       className="slot-app-picker"
       aria-label={label}
       value={value ?? ''}
       onPointerDown={(e) => e.stopPropagation()}
-      onChange={(e) => onChange(e.currentTarget.value || null)}
+      onChange={(e) => {
+        const next = e.currentTarget.value;
+        if (next.startsWith(NEW_PREFIX)) {
+          const app = apps.find((a) => a.id === next.slice(NEW_PREFIX.length))!;
+          layouts.createBlock(slotId, app.id, app.name);
+        } else {
+          layouts.setSlotBlock(slotId, next || null);
+        }
+      }}
     >
       <option value="">— Empty —</option>
-      {apps.map((app) => (
-        <option key={app.id} value={app.id}>
-          {app.name}
-        </option>
-      ))}
+      <optgroup label="Blocks">
+        {instances.map((i) => (
+          <option key={i.id} value={i.id}>
+            {i.label}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="New instance">
+        {apps.map((app) => (
+          <option key={app.id} value={`${NEW_PREFIX}${app.id}`}>
+            + New {app.name}
+          </option>
+        ))}
+      </optgroup>
     </select>
+  );
+}
+
+/**
+ * Authoring form for one block: its name plus a control per setting the app
+ * declared in its manifest. Changes apply live (the plugin is notified over its
+ * thread) and are committed with the view on Save.
+ */
+function BlockSettingsPanel({
+  instance,
+  layouts,
+  onClose,
+}: {
+  instance: Instance;
+  layouts: Layouts;
+  onClose(): void;
+}) {
+  const set = (key: string, value: SettingValue) =>
+    layouts.updateBlock(instance.block, {settings: {[key]: value}});
+  return (
+    <aside className="block-settings" aria-label="Block settings">
+      <header>
+        <strong>Block settings</strong>
+        <button className="slot-icon" aria-label="Close settings" onClick={onClose}>
+          ✕
+        </button>
+      </header>
+      <p className="block-settings-meta">
+        {instance.app.name} · <code>{instance.id}</code>
+      </p>
+      <label className="block-field">
+        <span>Block name</span>
+        <input
+          aria-label="Block name"
+          value={instance.label}
+          onInput={(e) => layouts.updateBlock(instance.block, {label: e.currentTarget.value})}
+        />
+      </label>
+      {Object.entries(instance.app.settings ?? {}).map(([key, descriptor]) => (
+        <SettingField
+          key={key}
+          descriptor={descriptor}
+          value={instance.settings[key]}
+          onChange={(value) => set(key, value)}
+        />
+      ))}
+    </aside>
+  );
+}
+
+function SettingField({
+  descriptor: d,
+  value,
+  onChange,
+}: {
+  descriptor: SettingDescriptor;
+  value: SettingValue | undefined;
+  onChange(value: SettingValue): void;
+}) {
+  if (d.type === 'boolean') {
+    return (
+      <label className="block-field block-field-inline">
+        <input
+          type="checkbox"
+          checked={Boolean(value)}
+          onChange={(e) => onChange(e.currentTarget.checked)}
+        />
+        <span>{d.label}</span>
+        {d.description && <small>{d.description}</small>}
+      </label>
+    );
+  }
+  return (
+    <label className="block-field">
+      <span>{d.label}</span>
+      {d.type === 'select' ? (
+        <select
+          aria-label={d.label}
+          value={String(value ?? '')}
+          onChange={(e) => onChange(e.currentTarget.value)}
+        >
+          {d.options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      ) : d.type === 'number' ? (
+        <input
+          aria-label={d.label}
+          type="number"
+          min={d.min}
+          max={d.max}
+          step={d.step}
+          value={Number(value ?? 0)}
+          onInput={(e) => {
+            const n = e.currentTarget.valueAsNumber;
+            if (!Number.isNaN(n)) onChange(n);
+          }}
+        />
+      ) : (
+        <input
+          aria-label={d.label}
+          value={String(value ?? '')}
+          onInput={(e) => onChange(e.currentTarget.value)}
+        />
+      )}
+      {d.description && <small>{d.description}</small>}
+    </label>
   );
 }

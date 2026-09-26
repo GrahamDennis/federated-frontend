@@ -187,6 +187,13 @@ non-overlapping **slots**, and each slot shows one app:
   each slot's default app, and create, duplicate, rename, or delete views. Saved
   views persist in localStorage.
 
+A slot shows a **block**: a configured instance of an app. The same plugin can
+run several times side by side, each instance with its own iframe, thread,
+commands and settings. For example, the "Two maps" view has an overview map and
+a detail map that follows the selection. Plugins declare settings in
+`ff-plugin.json#settings`, edit mode renders a form for them (⚙), and plugins
+receive the values live (`useHostSettings` in `@ff/plugin-sdk-react/settings`).
+
 Apps stay kept-alive and are placed by `grid-area` only, so moving, swapping, or
 enlarging never reloads an iframe. The ⌘K palette and shared context span every
 visible slot. Deep link: `/?mode=layout&view=quad`. The design, and how it
@@ -280,6 +287,10 @@ exercising the cross-origin channels rather than mocking them:
   grid, shared context across slots, swapping/enlarging/maximizing without
   reloading iframes, view switching + deep links, and authoring a view in edit
   mode (add, drag, resize, save, persists across reload).
+- `tests/blocks.spec.ts` — two configured instances of the map side by side,
+  cohering through the shared selection; palette commands labelled per
+  instance; adding another instance from a slot's picker; editing block
+  settings live in edit mode (saved with the view, discarded on Cancel).
 - `tests/routing.spec.ts` — a deep link restores app + docked detail + selection;
   switching apps, selecting a place, and docking the detail panel each update the
   URL; the default app is omitted for clean URLs.

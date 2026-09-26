@@ -24,6 +24,12 @@ export interface PluginManifest {
   detailApps?: string[];
   /** A detail-only companion: hidden from the main app rail. */
   detail?: boolean;
+  /**
+   * Per-instance settings the plugin accepts (see `SettingsSchema` in
+   * @ff/protocol). Opaque to the registry: passed through to the host, which
+   * renders an authoring form for it.
+   */
+  settings?: Record<string, unknown>;
 }
 
 /**

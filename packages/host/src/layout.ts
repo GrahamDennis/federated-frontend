@@ -1,10 +1,17 @@
+import type {BlockSettings} from '@ff/protocol';
+
 /**
  * The layout model: a fixed grid of cells, carved into rectangular **slots**,
- * each showing (at most) one app. Think cockpit displays rather than a windowing
+ * each showing (at most) one **block** — a running instance of an app. Think cockpit displays rather than a windowing
  * system — slots snap to cells, never overlap, and the set of slots is authored
  * ahead of time (in edit mode) as a named **view**. At run time the user can make
  * ad-hoc changes within a view: swap which app a slot shows, or temporarily
  * enlarge a slot over its neighbours.
+ *
+ * Blocks live in a registry shared by every view, so the same block (say, the
+ * main map) keeps its state as you switch views. Each app has an implicit
+ * default block whose id is the app id; more instances of an app (a second map
+ * with different settings) are explicit {@link Block} entries.
  *
  * Everything here is pure (no DOM, no Preact) so it's trivially testable.
  */
@@ -19,8 +26,38 @@ export interface Rect {
 
 export interface Slot extends Rect {
   id: string;
-  /** The app shown in this slot, or null for an empty slot. */
-  appId: string | null;
+  /** The block shown in this slot, or null for an empty slot. */
+  blockId: string | null;
+}
+
+/** A configured instance of an app. */
+export interface Block {
+  id: string;
+  appId: string;
+  /** Display name; defaults to the app's name. */
+  label?: string;
+  /** Values for the app's declared settings (merged over its defaults). */
+  settings?: BlockSettings;
+}
+
+/** Explicit block entries, keyed by id. Default blocks (id = app id) are implicit. */
+export type BlockRegistry = Record<string, Block>;
+
+/** Look up a block, falling back to the implicit default block of an app. */
+export function blockFor(
+  blocks: BlockRegistry,
+  id: string,
+  appIds: readonly string[],
+): Block | null {
+  return blocks[id] ?? (appIds.includes(id) ? {id, appId: id} : null);
+}
+
+/** A fresh block id for another instance of `appId`. */
+export function newBlockId(appId: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  let n = 2;
+  while (used.has(`${appId}~${n}`)) n++;
+  return `${appId}~${n}`;
 }
 
 export interface LayoutView {
@@ -41,6 +78,21 @@ export type Direction = 'left' | 'right' | 'up' | 'down';
 
 export const MAX_GRID = 8;
 
+export const DEFAULT_BLOCKS: BlockRegistry = {
+  'world-map~overview': {
+    id: 'world-map~overview',
+    appId: 'world-map',
+    label: 'Overview map',
+    settings: {title: 'Overview', followSelection: false, flyZoom: 4},
+  },
+  'world-map~detail': {
+    id: 'world-map~detail',
+    appId: 'world-map',
+    label: 'Detail map',
+    settings: {title: 'Detail', showCities: false, flyZoom: 12},
+  },
+};
+
 export const DEFAULT_VIEWS: LayoutView[] = [
   {
     id: 'nav-detail',
@@ -48,9 +100,9 @@ export const DEFAULT_VIEWS: LayoutView[] = [
     cols: 3,
     rows: 2,
     slots: [
-      {id: 's1', col: 0, row: 0, colSpan: 2, rowSpan: 2, appId: 'world-map'},
-      {id: 's2', col: 2, row: 0, colSpan: 1, rowSpan: 1, appId: 'places'},
-      {id: 's3', col: 2, row: 1, colSpan: 1, rowSpan: 1, appId: 'example-notes'},
+      {id: 's1', col: 0, row: 0, colSpan: 2, rowSpan: 2, blockId: 'world-map'},
+      {id: 's2', col: 2, row: 0, colSpan: 1, rowSpan: 1, blockId: 'places'},
+      {id: 's3', col: 2, row: 1, colSpan: 1, rowSpan: 1, blockId: 'example-notes'},
     ],
   },
   {
@@ -59,10 +111,10 @@ export const DEFAULT_VIEWS: LayoutView[] = [
     cols: 2,
     rows: 2,
     slots: [
-      {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 1, appId: 'world-map'},
-      {id: 's2', col: 1, row: 0, colSpan: 1, rowSpan: 1, appId: 'places'},
-      {id: 's3', col: 0, row: 1, colSpan: 1, rowSpan: 1, appId: 'example-notes'},
-      {id: 's4', col: 1, row: 1, colSpan: 1, rowSpan: 1, appId: null},
+      {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 1, blockId: 'world-map'},
+      {id: 's2', col: 1, row: 0, colSpan: 1, rowSpan: 1, blockId: 'places'},
+      {id: 's3', col: 0, row: 1, colSpan: 1, rowSpan: 1, blockId: 'example-notes'},
+      {id: 's4', col: 1, row: 1, colSpan: 1, rowSpan: 1, blockId: null},
     ],
   },
   {
@@ -72,10 +124,23 @@ export const DEFAULT_VIEWS: LayoutView[] = [
     cols: 4,
     rows: 1,
     slots: [
-      {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 1, appId: 'world-map'},
-      {id: 's2', col: 1, row: 0, colSpan: 1, rowSpan: 1, appId: 'places'},
-      {id: 's3', col: 2, row: 0, colSpan: 1, rowSpan: 1, appId: 'example-notes'},
-      {id: 's4', col: 3, row: 0, colSpan: 1, rowSpan: 1, appId: null},
+      {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 1, blockId: 'world-map'},
+      {id: 's2', col: 1, row: 0, colSpan: 1, rowSpan: 1, blockId: 'places'},
+      {id: 's3', col: 2, row: 0, colSpan: 1, rowSpan: 1, blockId: 'example-notes'},
+      {id: 's4', col: 3, row: 0, colSpan: 1, rowSpan: 1, blockId: null},
+    ],
+  },
+  {
+    // Two instances of the same plugin, configured differently: pick a city on
+    // the overview and the detail map (which follows the selection) zooms in.
+    id: 'two-maps',
+    name: 'Two maps',
+    cols: 3,
+    rows: 2,
+    slots: [
+      {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 1, blockId: 'world-map~overview'},
+      {id: 's2', col: 1, row: 0, colSpan: 2, rowSpan: 2, blockId: 'world-map~detail'},
+      {id: 's3', col: 0, row: 1, colSpan: 1, rowSpan: 1, blockId: 'places'},
     ],
   },
 ];
@@ -127,12 +192,12 @@ export function placeSlot(view: LayoutView, slotId: string, rect: Rect): LayoutV
   };
 }
 
-export function addSlot(view: LayoutView, rect: Rect, appId: string | null = null): LayoutView {
+export function addSlot(view: LayoutView, rect: Rect, blockId: string | null = null): LayoutView {
   if (!canPlace(view, rect)) return view;
   const used = new Set(view.slots.map((s) => s.id));
   let n = view.slots.length + 1;
   while (used.has(`s${n}`)) n++;
-  return {...view, slots: [...view.slots, {id: `s${n}`, ...rect, appId}]};
+  return {...view, slots: [...view.slots, {id: `s${n}`, ...rect, blockId}]};
 }
 
 export function removeSlot(view: LayoutView, slotId: string): LayoutView {
@@ -166,18 +231,19 @@ export function emptyCells(view: LayoutView): Rect[] {
 // ---- Run-time (user mode) operations ----
 
 /**
- * Show `appId` in `slotId`. An app lives in at most one slot (it's a single
- * kept-alive instance), so if it's already shown elsewhere the two slots swap.
+ * Show block `blockId` in `slotId`. A block is a single kept-alive instance, so
+ * it lives in at most one slot: if it's already shown elsewhere the two swap.
+ * (To show the same *app* twice, create another block of it.)
  */
-export function assignApp(view: LayoutView, slotId: string, appId: string | null): LayoutView {
+export function assignBlock(view: LayoutView, slotId: string, blockId: string | null): LayoutView {
   const target = view.slots.find((s) => s.id === slotId);
   if (!target) return view;
-  const previous = target.appId;
+  const previous = target.blockId;
   return {
     ...view,
     slots: view.slots.map((s) => {
-      if (s.id === slotId) return {...s, appId};
-      if (appId !== null && s.appId === appId) return {...s, appId: previous};
+      if (s.id === slotId) return {...s, blockId};
+      if (blockId !== null && s.blockId === blockId) return {...s, blockId: previous};
       return s;
     }),
   };
