@@ -3,6 +3,14 @@ import type {PortDescriptor, SettingDescriptor, SettingValue} from '@ff/protocol
 import type {AppDescriptor} from './apps';
 import {instanceFor, knownInstances, type Instance} from './instances';
 import {
+  ExprError,
+  FUNCTIONS,
+  inferType,
+  parseCached,
+  type Expr,
+  type PortTypeLookup,
+} from './expressions';
+import {
   MAX_GRID,
   addSlot,
   bindingFor,
@@ -295,8 +303,9 @@ export function SlotLayer({
                 .filter((b) => b.blockId === r.slot.blockId)
                 .map((b) => (
                   <span key={b.input} className="slot-edit-wire">
-                    ⇠ {b.input} ← {instance(b.from.blockId)?.label ?? b.from.blockId}.
-                    {b.from.output}
+                    {b.from
+                      ? `⇠ ${b.input} ← ${instance(b.from.blockId)?.label ?? b.from.blockId}.${b.from.output}`
+                      : `⇠ ${b.input} = ${b.expr ?? ''}`}
                   </span>
                 ))}
             </div>
@@ -557,6 +566,9 @@ function BlockSettingsPanel({
               input={input}
               port={port}
               sources={sources}
+              portType={(id, output) =>
+                instanceFor(layouts.blocks, id, apps)?.app.outputs?.[output]?.type
+              }
             />
           ))}
         </section>
@@ -592,9 +604,11 @@ function BlockSettingsPanel({
 
 const SEP = '\u0000';
 
+const EXPRESSION = '\u0001expr';
+
 /**
- * Connect one input to a type-compatible output of another block in the view.
- * The value encodes `blockId␀output`.
+ * Connect one input: to a type-compatible output of another block in the view
+ * (the option value encodes `blockId␀output`), or to a derived expression.
  */
 function InputField({
   layouts,
@@ -602,14 +616,17 @@ function InputField({
   input,
   port,
   sources,
+  portType,
 }: {
   layouts: Layouts;
   blockId: string;
   input: string;
   port: PortDescriptor;
   sources: Instance[];
+  portType: PortTypeLookup;
 }) {
   const bound = bindingFor(layouts.view, blockId, input);
+  const isExpr = bound?.expr !== undefined;
   const options = sources.flatMap((source) =>
     Object.entries(source.app.outputs ?? {})
       .filter(([, out]) => out.type === port.type)
@@ -618,32 +635,144 @@ function InputField({
         label: `${source.label} · ${out.label}`,
       })),
   );
+  const selected = isExpr
+    ? EXPRESSION
+    : bound?.from
+      ? `${bound.from.blockId}${SEP}${bound.from.output}`
+      : '';
   return (
-    <label className="block-field">
-      <span>
-        {port.label} <code>{port.type}</code>
-      </span>
-      <select
-        aria-label={`Input ${port.label}`}
-        value={bound ? `${bound.from.blockId}${SEP}${bound.from.output}` : ''}
-        onChange={(e) => {
-          const [fromBlock, output] = e.currentTarget.value.split(SEP);
-          layouts.setInputBinding(
-            blockId,
-            input,
-            fromBlock ? {blockId: fromBlock, output} : null,
-          );
-        }}
-      >
-        <option value="">— Not connected —</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+    <div className="block-field">
+      <label className="block-field">
+        <span>
+          {port.label} <code>{port.type}</code>
+        </span>
+        <select
+          aria-label={`Input ${port.label}`}
+          value={selected}
+          onChange={(e) => {
+            const value = e.currentTarget.value;
+            if (value === EXPRESSION) {
+              // Seed the expression with the current direct source, if any.
+              const seed = bound?.from ? `${bound.from.blockId}.${bound.from.output}` : '';
+              layouts.setInputBinding(blockId, input, {expr: seed});
+              return;
+            }
+            const [fromBlock, output] = value.split(SEP);
+            layouts.setInputBinding(
+              blockId,
+              input,
+              fromBlock ? {from: {blockId: fromBlock, output}} : null,
+            );
+          }}
+        >
+          <option value="">— Not connected —</option>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+          <option value={EXPRESSION}>ƒ Expression…</option>
+        </select>
+      </label>
+      {isExpr && (
+        <ExpressionEditor
+          value={bound!.expr!}
+          label={port.label}
+          expected={port.type}
+          sources={sources}
+          portType={portType}
+          onChange={(expr) => layouts.setInputBinding(blockId, input, {expr})}
+        />
+      )}
       {port.description && <small>{port.description}</small>}
-    </label>
+    </div>
+  );
+}
+
+/**
+ * Text editor for a derived expression: live parse errors, the inferred result
+ * type (with a warning if it doesn't match the input's type), and clickable
+ * references to the outputs of other blocks in the view.
+ */
+function ExpressionEditor({
+  value,
+  label,
+  expected,
+  sources,
+  portType,
+  onChange,
+}: {
+  value: string;
+  label: string;
+  expected: string;
+  sources: Instance[];
+  portType: PortTypeLookup;
+  onChange(expr: string): void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const parsed = value.trim() ? parseCached(value) : null;
+  const error = parsed instanceof ExprError ? parsed : null;
+  const type = parsed && !error ? inferType(parsed as Expr, portType) : null;
+  const mismatch = type && type !== 'any' && type !== expected;
+
+  function insert(text: string) {
+    const el = ref.current;
+    const at = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? at;
+    onChange(value.slice(0, at) + text + value.slice(end));
+  }
+
+  return (
+    <div className="expr-editor">
+      <textarea
+        ref={ref}
+        aria-label={`Expression for ${label}`}
+        spellcheck={false}
+        rows={2}
+        value={value}
+        placeholder="e.g. bboxAround(histogram.selection, 1500)"
+        onInput={(e) => onChange(e.currentTarget.value)}
+      />
+      <div className="expr-status" role="status">
+        {error ? (
+          <span className="expr-error">
+            ✕ {error.message} (at {error.position + 1})
+          </span>
+        ) : type ? (
+          <span className={mismatch ? 'expr-warn' : 'expr-ok'}>
+            {mismatch ? '⚠' : '✓'} → <code>{type}</code>
+            {mismatch && ` (input expects ${expected})`}
+          </span>
+        ) : (
+          <span className="expr-hint">Empty — evaluates to null</span>
+        )}
+      </div>
+      <div className="expr-refs" aria-label="Available outputs">
+        {sources.flatMap((source) =>
+          Object.entries(source.app.outputs ?? {}).map(([output, out]) => (
+            <button
+              key={`${source.id}.${output}`}
+              type="button"
+              className="expr-ref"
+              title={`${source.label} · ${out.label} (${out.type})`}
+              onClick={() => insert(`${source.id}.${output}`)}
+            >
+              {source.id}.{output}
+            </button>
+          )),
+        )}
+      </div>
+      <details className="expr-help">
+        <summary>Functions</summary>
+        <ul>
+          {Object.entries(FUNCTIONS).map(([name, fn]) => (
+            <li key={name}>
+              <code>{name}</code> — {fn.doc}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
   );
 }
 

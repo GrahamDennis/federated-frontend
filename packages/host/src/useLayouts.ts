@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useState} from 'preact/hooks';
+import {useCallback, useLayoutEffect, useMemo, useState} from 'preact/hooks';
 import type {BlockSettings} from '@ff/protocol';
 import {
   DEFAULT_BLOCKS,
@@ -10,8 +10,9 @@ import {
   newBlockId,
   rectOf,
   resolveSlots,
+  bindingSources,
   setBinding,
-  type Binding,
+  type BindingSource,
   type Block,
   type BlockRegistry,
   type Direction,
@@ -127,7 +128,9 @@ export function useLayouts(initialViewId: string | null) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const updateDraftView = useDraftViewUpdater(setDraft);
 
-  useEffect(() => store(saved), [saved]);
+  // Persist in the commit (a layout effect), not after paint: a plain effect
+  // can lose the write if the page is closed or reloaded right after Save.
+  useLayoutEffect(() => store(saved), [saved]);
 
   const savedView = views.find((v) => v.id === activeViewId) ?? views[0];
   const live = liveByView[savedView.id] ?? savedView;
@@ -211,8 +214,8 @@ export function useLayouts(initialViewId: string | null) {
 
   /** Wire (or unwire) one block input in the draft view (edit mode only). */
   const setInputBinding = useCallback(
-    (blockId: string, input: string, from: Binding['from'] | null) =>
-      updateDraftView((v) => setBinding(v, blockId, input, from)),
+    (blockId: string, input: string, source: BindingSource | null) =>
+      updateDraftView((v) => setBinding(v, blockId, input, source)),
     [],
   );
 
@@ -243,7 +246,9 @@ export function useLayouts(initialViewId: string | null) {
             ...d.view,
             slots: d.view.slots.map((s) => (s.blockId === blockId ? {...s, blockId: null} : s)),
             bindings: (d.view.bindings ?? []).filter(
-              (b) => b.blockId !== blockId && b.from.blockId !== blockId,
+              (b) =>
+                b.blockId !== blockId &&
+                !bindingSources(b).some((source) => source.blockId === blockId),
             ),
           },
         };

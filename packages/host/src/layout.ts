@@ -1,4 +1,5 @@
 import type {BlockInputs, BlockSettings, PortValue} from '@ff/protocol';
+import {ExprError, evaluateSource, parseCached, refsOf} from './expressions';
 
 /**
  * The layout model: a fixed grid of cells, carved into rectangular **slots**,
@@ -78,8 +79,14 @@ export interface LayoutView {
 export interface Binding {
   blockId: string;
   input: string;
-  from: {blockId: string; output: string};
+  /** Source: another block's output, taken as-is… */
+  from?: {blockId: string; output: string};
+  /** …or a derived expression over block outputs (see expressions.ts). */
+  expr?: string;
 }
+
+/** What an input is bound to: a direct output reference or an expression. */
+export type BindingSource = {from: {blockId: string; output: string}} | {expr: string};
 
 /** A temporary run-time enlargement of one slot (covers the slots under it). */
 export interface Enlargement {
@@ -103,6 +110,12 @@ export const DEFAULT_BLOCKS: BlockRegistry = {
     appId: 'world-map',
     label: 'Detail map',
     settings: {title: 'Detail', showCities: false, flyZoom: 12},
+  },
+  'histogram~nearby': {
+    id: 'histogram~nearby',
+    appId: 'histogram',
+    label: 'Nearby cities',
+    settings: {title: 'Within 1,500 km', maxRows: 6},
   },
 };
 
@@ -174,6 +187,30 @@ export const DEFAULT_VIEWS: LayoutView[] = [
       {blockId: 'histogram', input: 'viewport', from: {blockId: 'world-map~overview', output: 'viewport'}},
       {blockId: 'world-map~detail', input: 'focus', from: {blockId: 'histogram', output: 'selection'}},
       {blockId: 'places', input: 'place', from: {blockId: 'histogram', output: 'selection'}},
+    ],
+  },
+  {
+    // Derived expressions: a second histogram shows the cities within 1,500 km
+    // of whatever's picked in the first (its viewport is *computed* from that
+    // pick), and Places shows the nearby pick if there is one, else the main one.
+    id: 'nearby',
+    name: 'Nearby (derived)',
+    cols: 3,
+    rows: 2,
+    slots: [
+      {id: 's1', col: 0, row: 0, colSpan: 1, rowSpan: 2, blockId: 'histogram'},
+      {id: 's2', col: 1, row: 0, colSpan: 2, rowSpan: 1, blockId: 'world-map~detail'},
+      {id: 's3', col: 1, row: 1, colSpan: 1, rowSpan: 1, blockId: 'histogram~nearby'},
+      {id: 's4', col: 2, row: 1, colSpan: 1, rowSpan: 1, blockId: 'places'},
+    ],
+    bindings: [
+      {blockId: 'world-map~detail', input: 'focus', from: {blockId: 'histogram', output: 'selection'}},
+      {blockId: 'histogram~nearby', input: 'viewport', expr: 'bboxAround(histogram.selection, 1500)'},
+      {
+        blockId: 'places',
+        input: 'place',
+        expr: 'coalesce(histogram~nearby.selection, histogram.selection)',
+      },
     ],
   },
 ];
@@ -342,22 +379,30 @@ export function bindingFor(view: LayoutView, blockId: string, input: string): Bi
   return view.bindings?.find((b) => b.blockId === blockId && b.input === input);
 }
 
-/** Connect (or, with `from = null`, disconnect) one block input. */
+/** Connect (or, with `source = null`, disconnect) one block input. */
 export function setBinding(
   view: LayoutView,
   blockId: string,
   input: string,
-  from: Binding['from'] | null,
+  source: BindingSource | null,
 ): LayoutView {
   const others = (view.bindings ?? []).filter(
     (b) => !(b.blockId === blockId && b.input === input),
   );
-  return {...view, bindings: from ? [...others, {blockId, input, from}] : others};
+  return {...view, bindings: source ? [...others, {blockId, input, ...source}] : others};
+}
+
+/** The block outputs a binding reads (directly, or anywhere in its expression). */
+export function bindingSources(binding: Binding): {blockId: string; output: string}[] {
+  if (binding.from) return [binding.from];
+  const parsed = binding.expr ? parseCached(binding.expr) : null;
+  return parsed && !(parsed instanceof ExprError) ? refsOf(parsed) : [];
 }
 
 /**
  * A block's wired inputs in `view`: every bound input is present, holding its
- * source's latest published value (or null). Unbound inputs are absent.
+ * source's latest published value — or its expression's result — or null.
+ * Unbound inputs are absent.
  */
 export function resolveInputs(
   view: LayoutView,
@@ -366,7 +411,12 @@ export function resolveInputs(
 ): BlockInputs {
   const inputs: BlockInputs = {};
   for (const b of view.bindings ?? []) {
-    if (b.blockId === blockId) inputs[b.input] = outputOf(b.from.blockId, b.from.output) ?? null;
+    if (b.blockId !== blockId) continue;
+    inputs[b.input] = b.from
+      ? (outputOf(b.from.blockId, b.from.output) ?? null)
+      : b.expr
+        ? evaluateSource(b.expr, outputOf)
+        : null;
   }
   return inputs;
 }

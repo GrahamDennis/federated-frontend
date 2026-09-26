@@ -867,3 +867,73 @@ code {
   padding-left: 16px;
   color: var(--text);
 }
+
+/* Derived-expression editor inside the block panel. */
+.expr-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.expr-editor textarea {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  resize: vertical;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 7px;
+}
+.expr-status {
+  font-size: 12px;
+}
+.expr-ok {
+  color: var(--success);
+}
+.expr-warn {
+  color: #d29922;
+}
+.expr-error {
+  color: var(--critical);
+}
+.expr-hint {
+  color: var(--subdued);
+}
+.expr-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.expr-ref {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--accent);
+  cursor: pointer;
+}
+.expr-ref:hover {
+  border-color: var(--accent);
+}
+.expr-help summary {
+  cursor: pointer;
+  color: var(--subdued);
+  font-size: 12px;
+}
+.expr-help ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--subdued);
+  max-height: 140px;
+  overflow: auto;
+}
+.slot-edit-wire {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 8px;
+}
