@@ -4,7 +4,14 @@ import {serve} from '@hono/node-server';
 import {Hono, type Context} from 'hono';
 import {cors} from 'hono/cors';
 import {streamSSE} from 'hono/streaming';
-import {validateLayout, type Block, type BlockRegistry, type LayoutView} from '@ff/layout-model';
+import {
+  blockRenames,
+  renameInView,
+  validateLayout,
+  type Block,
+  type BlockRegistry,
+  type LayoutView,
+} from '@ff/layout-model';
 import {loadConfig} from './config';
 import {WorkspaceStore, isWorkspaceId, type UserState, type Workspace} from './store';
 import {issueToken, verifyBearer} from './auth';
@@ -306,13 +313,25 @@ app.put('/v1/layouts/views/:id', async (c) => {
 
   const current = ws.views.find((v) => v.id === view.id);
   const saved = {...view, rev: (current?.rev ?? 0) + 1};
+  // A renamed block: rewrite references in every *other* view's expressions
+  // (the saved view arrives already rewritten by the editor), bumping their
+  // revisions so drafts and ad-hoc copies of them are refreshed.
+  const renames = blockRenames(ws.blocks, blocks);
+  const rewritten: string[] = [];
+  const others = ws.views.map((v) => {
+    if (v.id === view.id) return v;
+    const renamed = renames.reduce((acc, r) => renameInView(acc, r.from, r.to), v);
+    if (renamed === v) return v;
+    rewritten.push(v.id);
+    return {...renamed, rev: (v.rev ?? 0) + 1};
+  });
   const next: Workspace = {
     ...ws,
     blocks,
-    views: current ? ws.views.map((v) => (v.id === view.id ? saved : v)) : [...ws.views, saved],
+    views: current ? others.map((v) => (v.id === view.id ? saved : v)) : [...others, saved],
   };
   await store.put(who.workspace, next);
-  layoutsChanged(who.workspace, who, [view.id]);
+  layoutsChanged(who.workspace, who, [view.id, ...rewritten]);
   return c.json(visibleTo(next, who.role, who.canEdit));
 });
 

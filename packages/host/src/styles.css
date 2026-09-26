@@ -1019,3 +1019,11 @@ code {
 .layout-bar.editing .editing-now {
   flex-basis: auto;
 }
+.rename-row {
+  display: flex;
+  gap: 6px;
+}
+.rename-row input {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+}

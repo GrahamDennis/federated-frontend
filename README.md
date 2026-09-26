@@ -272,6 +272,7 @@ npm run dev       # host (:5173), plugin registry (:5180), layout service (:5181
 # open http://localhost:5173
 npm run typecheck
 npm test          # Playwright e2e (boots all the dev servers automatically)
+npm run cel-conformance -w @ff/layout-model   # CEL conformance report → docs/cel-conformance.md
 ```
 
 The host discovers its apps from the plugin registry (`:5180`), which in dev is
@@ -345,6 +346,12 @@ exercising the cross-origin channels rather than mocking them:
   identity (only a valid token counts: no or tampered tokens get 401 and role
   headers are ignored); and per-user state (private per user, following them
   across reloads, and dropped when the approved view changes).
+- `tests/hygiene.spec.ts` — renaming references (only variables change;
+  fields, strings and formatting are kept), rewriting views and detecting
+  renames (pure); checking published values against their port types (pure);
+  and renaming a block in the editor, which rewrites the current view at once
+  and other views on save (via the service), with the renamed expressions still
+  working.
 - `tests/live.spec.ts` — live updates and presence across two people: another
   user's view refreshing when an editor saves, "is editing" appearing and
   clearing (including when the editor's tab closes), an editor warned before

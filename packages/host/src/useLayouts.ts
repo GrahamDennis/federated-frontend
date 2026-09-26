@@ -10,6 +10,8 @@ import {
   newBlockId,
   rectOf,
   blockChanges,
+  blockRenames,
+  renameInView,
   resolveSlots,
   setBinding,
   type BindingSource,
@@ -453,7 +455,7 @@ export function useLayouts(initialViewId: string | null) {
 
   /** Edit a block's label/settings (edit mode only; takes effect live). */
   const updateBlock = useCallback(
-    (base: Block, patch: {label?: string; settings?: BlockSettings}) => {
+    (base: Block, patch: {label?: string; name?: string; settings?: BlockSettings}) => {
       setDraft(
         (d) =>
           d && {
@@ -464,6 +466,7 @@ export function useLayouts(initialViewId: string | null) {
                 ...base,
                 ...(d.blocks[base.id] ?? {}),
                 ...(patch.label !== undefined ? {label: patch.label} : {}),
+                ...(patch.name !== undefined ? {name: patch.name} : {}),
                 settings: {
                   ...(d.blocks[base.id]?.settings ?? base.settings ?? {}),
                   ...(patch.settings ?? {}),
@@ -474,6 +477,19 @@ export function useLayouts(initialViewId: string | null) {
       );
     },
     [],
+  );
+
+  /**
+   * Rename a block's expression name (edit mode): the block and every
+   * expression in the draft view change now; on save, other views that refer
+   * to it are rewritten too (by the service, or locally).
+   */
+  const renameBlock = useCallback(
+    (base: Block, from: string, to: string) => {
+      updateBlock(base, {name: to});
+      updateDraftView((v) => renameInView(v, from, to));
+    },
+    [updateBlock, updateDraftView],
   );
 
   /** Wire (or unwire) one block input in the draft view (edit mode only). */
@@ -654,13 +670,18 @@ export function useLayouts(initialViewId: string | null) {
       );
       return;
     }
-    setSaved((s) => ({
-      ...s,
-      blocks: nextBlocks,
-      views: s.views.some((v) => v.id === next.id)
-        ? s.views.map((v) => (v.id === next.id ? next : v))
-        : [...s.views, next],
-    }));
+    const renames = blockRenames(draft.baseBlocks, nextBlocks);
+    setSaved((s) => {
+      // The saved view, plus other views rewritten for any renamed blocks.
+      const views = s.views.map((v) =>
+        v.id === next.id ? next : renames.reduce((acc, r) => renameInView(acc, r.from, r.to), v),
+      );
+      return {
+        ...s,
+        blocks: nextBlocks,
+        views: views.some((v) => v.id === next.id) ? views : [...views, next],
+      };
+    });
     // The saved definition changed, so any ad-hoc edits to it are stale.
     setLiveByView(({[next.id]: _dropped, ...rest}) => rest);
     setActiveViewId(next.id);
@@ -752,6 +773,7 @@ export function useLayouts(initialViewId: string | null) {
     overwriteTheirs,
     saving,
     setViewRoles,
+    renameBlock,
     views,
     blocks,
     activeViewId: savedView.id,

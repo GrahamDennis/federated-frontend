@@ -22,7 +22,7 @@ import type {
 import type {AppDescriptor} from './apps';
 import {AppView} from './AppView';
 import {readWorkspaceFromUrl, writeWorkspaceToUrl} from './workspaceUrl';
-import {gridArea, resolveInputs, type Rect} from '@ff/layout-model';
+import {gridArea, resolveInputs, validatePortValue, type Rect} from '@ff/layout-model';
 import {useInstanceFeed} from './instanceFeed';
 import {LayoutBar, SlotLayer, gridTemplate} from './LayoutStage';
 import {useLayouts} from './useLayouts';
@@ -266,13 +266,32 @@ export function Chrome({apps}: {apps: AppDescriptor[]}) {
   // Publishing bumps `outputsVersion` to re-render, which runs the feed's diff.
   const outputsRef = useRef(new Map<string, Record<string, PortValue | null>>());
   const [, setOutputsVersion] = useState(0);
+  // Values from plugins are untrusted: only declared outputs, of the declared
+  // type, are routed to other blocks. Each distinct problem is reported once.
+  const reportedPublishProblems = useRef(new Set<string>());
   const publishOutput = useCallback(
     (instanceId: string, output: string, value: PortValue | null) => {
+      const instance = instancesRef.current.get(instanceId);
+      const port = instance?.app.outputs?.[output];
+      const problem = !port
+        ? `isn’t a declared output`
+        : validatePortValue(port.type, value);
+      if (problem) {
+        const key = `${instanceId}:${output}:${problem}`;
+        if (!reportedPublishProblems.current.has(key)) {
+          reportedPublishProblems.current.add(key);
+          console.warn(`[host] ignored ${instanceId}.${output}: ${problem}`, value);
+          toast(`${instance?.label ?? instanceId}: ignored invalid “${output}” (${problem})`, {
+            tone: 'critical',
+          });
+        }
+        return;
+      }
       const current = outputsRef.current.get(instanceId) ?? {};
       outputsRef.current.set(instanceId, {...current, [output]: value});
       setOutputsVersion((version) => version + 1);
     },
-    [],
+    [toast],
   );
   const wiringView = layoutMode ? layouts.view : null;
   const scope = useMemo(() => exprScope(layouts.blocks, apps), [layouts.blocks, apps]);

@@ -2,7 +2,7 @@ import {useRef, useState} from 'preact/hooks';
 import type {PortDescriptor, SettingDescriptor, SettingValue} from '@ff/protocol';
 import type {AppDescriptor} from './apps';
 import {exprScope, instanceFor, knownInstances, type Instance} from './instances';
-import {FUNCTIONS, IDIOMS, checkExpr, type ExprScope} from '@ff/layout-model';
+import {FUNCTIONS, IDIOMS, checkExpr, toIdentifier, type ExprScope} from '@ff/layout-model';
 import {
   MAX_GRID,
   addSlot,
@@ -626,6 +626,52 @@ function BlockPicker({
  * declared in its manifest. Changes apply live (the plugin is notified over its
  * thread) and are committed with the view on Save.
  */
+/**
+ * Rename the identifier expressions use for a block. Renaming rewrites every
+ * reference — in this view now, and in other views when the edit is saved.
+ */
+function RenameField({
+  instance,
+  layouts,
+  scope,
+}: {
+  instance: Instance;
+  layouts: Layouts;
+  scope: ExprScope;
+}) {
+  const [value, setValue] = useState(instance.name);
+  const taken = scope.some((b) => b.name === value && b.blockId !== instance.id);
+  const error =
+    value === instance.name
+      ? null
+      : toIdentifier(value) !== value
+        ? 'Use letters, digits and _ (not starting with a digit)'
+        : taken
+          ? 'Another block already uses this name'
+          : null;
+  return (
+    <div className="block-field">
+      <span>Name in expressions</span>
+      <div className="rename-row">
+        <input
+          aria-label="Name in expressions"
+          value={value}
+          spellcheck={false}
+          onInput={(e) => setValue(e.currentTarget.value.trim())}
+        />
+        <button
+          className="btn"
+          disabled={value === instance.name || Boolean(error)}
+          onClick={() => layouts.renameBlock(instance.block, instance.name, value)}
+        >
+          Rename
+        </button>
+      </div>
+      {error && <small className="expr-error">{error}</small>}
+    </div>
+  );
+}
+
 /** Whether a block has anything to author in the block panel. */
 function hasPanel(instance: Instance | null): boolean {
   if (!instance) return false;
@@ -673,6 +719,9 @@ function BlockSettingsPanel({
           </>
         )}
       </p>
+      {instance.app.outputs && (
+        <RenameField key={instance.id} instance={instance} layouts={layouts} scope={scope} />
+      )}
       <label className="block-field">
         <span>Block name</span>
         <input

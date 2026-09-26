@@ -142,6 +142,12 @@ At run time:
   layout mode; apps mode has none.
 - Plugins never learn who is upstream or downstream. The host is the only
   router, so plugins stay isolated from each other.
+- **Published values are checked.** Plugins are untrusted, so the host only
+  routes a value published on a *declared* output that fits the output's type:
+  a place needs a string id and name and valid coordinates, a bbox needs
+  numeric edges with south ≤ north, and so on (`validatePortValue`). Anything
+  else is dropped and reported once as a toast and a console warning, rather
+  than being passed downstream.
 - Port types are names (`place`, `bbox`, `range`, …) with shapes agreed in
   `@ff/protocol`. The host treats values as opaque JSON and only uses the type
   name to decide which outputs may feed which inputs.
@@ -194,8 +200,29 @@ has(overview.selection) ? overview.selection : detail.selection
 **Why this implementation:** `@marcbachmann/cel-js` has no dependencies and
 supports custom types from plain field schemas, typed custom functions,
 optional chaining and static `check()`. The alternative, `@bufbuild/cel`,
-models custom types as protobuf messages and pulls in protobuf and RE2. The
-package claims "most of the CEL spec", not full conformance.
+models custom types as protobuf messages and pulls in protobuf and RE2.
+
+**Conformance, measured.** `npm run cel-conformance -w @ff/layout-model` runs
+the official cel-spec conformance suite (2,344 tests, via
+`@bufbuild/cel-spec`) against the library with our environment's options, and
+writes [`cel-conformance.md`](cel-conformance.md). Tests that need protobuf
+messages, declared type environments or containers are skipped, because layout
+expressions only exchange JSON-shaped values.
+
+- **Core spec: 90% of the applicable tests pass.**
+- The optional extension libraries score 28%. They're cel-go add-ons (string,
+  math and encoder extensions, two-variable comprehensions), and most aren't
+  implemented by cel-js.
+
+The notable core gaps for authors:
+
+- no cross-type numeric equality: `1 == 1.0` is a type error, where the spec
+  says `true`. Write `1.0`. Our number-taking functions accept `int` too;
+- some `uint` conversions are missing;
+- a few overflow cases that should be errors are accepted;
+- backtick-quoted field names aren't supported.
+
+Re-run the script when upgrading the library.
 
 **How it maps:**
 
@@ -232,6 +259,18 @@ text box with:
 
 Switching from a direct source seeds the expression with the equivalent
 reference.
+
+**Renaming blocks.** In edit mode, the block panel's "Name in expressions"
+renames a block (the name must be a valid identifier and unique).
+`renameReferences` rewrites only *variable* references, using the parser's
+source ranges, so field names (`x.histogram`), strings and formatting are
+untouched.
+
+- The draft view's expressions change immediately.
+- On save, the service rewrites every *other* view that refers to the old name
+  and bumps their revisions, so other editors' drafts and users' ad-hoc copies
+  of those views refresh.
+- Local mode does the same in the browser.
 
 The **"Nearby (derived)"** default view shows this. A second histogram
 instance's viewport is `bboxAround(histogram.selection, 1500)`, so it lists the
@@ -438,15 +477,13 @@ Still to do:
   by creating a second block.
 - Unused blocks aren't garbage-collected automatically. They can be deleted by
   hand from the block panel.
-- Port types are just names. Nothing validates that a published value matches
-  its declared type.
 - Wiring has no cycle detection. A cycle would only loop if plugins republish
   on every input change, and none of the examples do.
 - The editor offers only blocks placed in the current view as input sources.
   Expressions can reference any known block by name.
-- Block names are assigned once and can't be renamed in the UI, because
-  expressions refer to them. Renaming would need to rewrite those expressions,
-  for example via the AST.
+- Renaming a block rewrites a comprehension variable with the same name as
+  well (e.g. in `list.map(histogram, …)`). Block names rarely collide with
+  such variables.
 - Deleting a block removes direct wires from it. An expression that mentions it
   is kept and shows an "Unknown variable" error until it's fixed.
 - Commands are fire-and-forget: they take no arguments, and a button can't

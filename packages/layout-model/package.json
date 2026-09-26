@@ -10,10 +10,14 @@
   },
   "comment": "The layout model shared by the host (browser) and the layout service (Node): views, blocks, wiring, CEL expressions and validation. Pure TS, consumed as source.",
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "cel-conformance": "tsx scripts/cel-conformance.ts"
   },
   "dependencies": {
     "@ff/protocol": "*",
     "@marcbachmann/cel-js": "^8.0.0"
+  },
+  "devDependencies": {
+    "@bufbuild/cel-spec": "^0.6.1"
   }
 }

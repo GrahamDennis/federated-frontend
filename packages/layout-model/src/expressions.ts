@@ -369,3 +369,33 @@ export function referencedOutputs(src: string): {name: string; output: string}[]
   walk(ast);
   return refs;
 }
+
+/**
+ * Rewrite references to the variable `from` as `to` — e.g. after renaming a
+ * block — editing only the identifier's source range, so formatting, strings
+ * and field names (`x.from`) are untouched. Unparseable input is returned as
+ * is. (Comprehension variables that shadow `from`, as in
+ * `list.map(from, …)`, would be renamed too; block names rarely collide.)
+ */
+export function renameReferences(src: string, from: string, to: string): string {
+  let ast: ASTNode;
+  try {
+    ast = (base ??= baseEnvironment()).parse(src).ast;
+  } catch {
+    return src;
+  }
+  const ranges: {start: number; end: number}[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!node || typeof node !== 'object' || !('op' in node)) return;
+    const {op, args, start, end} = node as {op: string; args: unknown; start: number; end: number};
+    if (op === 'id' && args === from) ranges.push({start, end});
+    walk(args);
+  };
+  walk(ast);
+  let out = src;
+  for (const {start, end} of ranges.sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, start) + to + out.slice(end);
+  }
+  return out;
+}
